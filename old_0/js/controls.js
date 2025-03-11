@@ -31,6 +31,12 @@ export class Controls {
 
                 // Clamp vertical rotation to prevent flipping
                 this.camera.rotation[1] = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, this.camera.rotation[1]));
+
+                // Normalize yaw rotation to keep it in a reasonable range
+                this.camera.rotation[0] = this.camera.rotation[0] % (2 * Math.PI);
+                if (this.camera.rotation[0] < 0) {
+                    this.camera.rotation[0] += 2 * Math.PI;
+                }
             }
         });
 

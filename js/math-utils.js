@@ -229,55 +229,82 @@ export const mat4 = {
             ]
         };
 
-        // Extract planes from projection-view matrix
-        // Left plane
-        frustum.planes[0][0] = projectionViewMatrix[3] + projectionViewMatrix[0];
-        frustum.planes[0][1] = projectionViewMatrix[7] + projectionViewMatrix[4];
-        frustum.planes[0][2] = projectionViewMatrix[11] + projectionViewMatrix[8];
-        frustum.planes[0][3] = projectionViewMatrix[15] + projectionViewMatrix[12];
+        // Column 1
+        const m0 = projectionViewMatrix[0];
+        const m1 = projectionViewMatrix[1];
+        const m2 = projectionViewMatrix[2];
+        const m3 = projectionViewMatrix[3];
 
-        // Right plane
-        frustum.planes[1][0] = projectionViewMatrix[3] - projectionViewMatrix[0];
-        frustum.planes[1][1] = projectionViewMatrix[7] - projectionViewMatrix[4];
-        frustum.planes[1][2] = projectionViewMatrix[11] - projectionViewMatrix[8];
-        frustum.planes[1][3] = projectionViewMatrix[15] - projectionViewMatrix[12];
+        // Column 2
+        const m4 = projectionViewMatrix[4];
+        const m5 = projectionViewMatrix[5];
+        const m6 = projectionViewMatrix[6];
+        const m7 = projectionViewMatrix[7];
 
-        // Bottom plane
-        frustum.planes[2][0] = projectionViewMatrix[3] + projectionViewMatrix[1];
-        frustum.planes[2][1] = projectionViewMatrix[7] + projectionViewMatrix[5];
-        frustum.planes[2][2] = projectionViewMatrix[11] + projectionViewMatrix[9];
-        frustum.planes[2][3] = projectionViewMatrix[15] + projectionViewMatrix[13];
+        // Column 3
+        const m8 = projectionViewMatrix[8];
+        const m9 = projectionViewMatrix[9];
+        const m10 = projectionViewMatrix[10];
+        const m11 = projectionViewMatrix[11];
 
-        // Top plane
-        frustum.planes[3][0] = projectionViewMatrix[3] - projectionViewMatrix[1];
-        frustum.planes[3][1] = projectionViewMatrix[7] - projectionViewMatrix[5];
-        frustum.planes[3][2] = projectionViewMatrix[11] - projectionViewMatrix[9];
-        frustum.planes[3][3] = projectionViewMatrix[15] - projectionViewMatrix[13];
+        // Column 4
+        const m12 = projectionViewMatrix[12];
+        const m13 = projectionViewMatrix[13];
+        const m14 = projectionViewMatrix[14];
+        const m15 = projectionViewMatrix[15];
 
-        // Near plane
-        frustum.planes[4][0] = projectionViewMatrix[3] + projectionViewMatrix[2];
-        frustum.planes[4][1] = projectionViewMatrix[7] + projectionViewMatrix[6];
-        frustum.planes[4][2] = projectionViewMatrix[11] + projectionViewMatrix[10];
-        frustum.planes[4][3] = projectionViewMatrix[15] + projectionViewMatrix[14];
+        // Left plane (m3 + m0)
+        frustum.planes[0][0] = m3 + m0;
+        frustum.planes[0][1] = m7 + m4;
+        frustum.planes[0][2] = m11 + m8;
+        frustum.planes[0][3] = m15 + m12;
 
-        // Far plane
-        frustum.planes[5][0] = projectionViewMatrix[3] - projectionViewMatrix[2];
-        frustum.planes[5][1] = projectionViewMatrix[7] - projectionViewMatrix[6];
-        frustum.planes[5][2] = projectionViewMatrix[11] - projectionViewMatrix[10];
-        frustum.planes[5][3] = projectionViewMatrix[15] - projectionViewMatrix[14];
+        // Right plane (m3 - m0)
+        frustum.planes[1][0] = m3 - m0;
+        frustum.planes[1][1] = m7 - m4;
+        frustum.planes[1][2] = m11 - m8;
+        frustum.planes[1][3] = m15 - m12;
+
+        // Bottom plane (m3 + m1)
+        frustum.planes[2][0] = m3 + m1;
+        frustum.planes[2][1] = m7 + m5;
+        frustum.planes[2][2] = m11 + m9;
+        frustum.planes[2][3] = m15 + m13;
+
+        // Top plane (m3 - m1)
+        frustum.planes[3][0] = m3 - m1;
+        frustum.planes[3][1] = m7 - m5;
+        frustum.planes[3][2] = m11 - m9;
+        frustum.planes[3][3] = m15 - m13;
+
+        // Near plane (m3 + m2)
+        frustum.planes[4][0] = m3 + m2;
+        frustum.planes[4][1] = m7 + m6;
+        frustum.planes[4][2] = m11 + m10;
+        frustum.planes[4][3] = m15 + m14;
+
+        // Far plane (m3 - m2)
+        frustum.planes[5][0] = m3 - m2;
+        frustum.planes[5][1] = m7 - m6;
+        frustum.planes[5][2] = m11 - m10;
+        frustum.planes[5][3] = m15 - m14;
 
         // Normalize planes
         for (let i = 0; i < 6; i++) {
+            const plane = frustum.planes[i];
             const length = Math.sqrt(
-                frustum.planes[i][0] * frustum.planes[i][0] +
-                frustum.planes[i][1] * frustum.planes[i][1] +
-                frustum.planes[i][2] * frustum.planes[i][2]
+                plane[0] * plane[0] +
+                plane[1] * plane[1] +
+                plane[2] * plane[2]
             );
 
-            frustum.planes[i][0] /= length;
-            frustum.planes[i][1] /= length;
-            frustum.planes[i][2] /= length;
-            frustum.planes[i][3] /= length;
+            // Only normalize if length is not zero
+            if (length > 0.00001) {
+                plane[0] /= length;
+                plane[1] /= length;
+                plane[2] /= length;
+                plane[3] /= length;
+            }
         }
 
         return frustum;
@@ -288,26 +315,10 @@ export const mat4 = {
         for (let i = 0; i < 6; i++) {
             const plane = frustum.planes[i];
 
-            // Find the point furthest along the normal direction
-            let px, py, pz;
-
-            if (plane[0] >= 0) {
-                px = maxX;
-            } else {
-                px = minX;
-            }
-
-            if (plane[1] >= 0) {
-                py = maxY;
-            } else {
-                py = minY;
-            }
-
-            if (plane[2] >= 0) {
-                pz = maxZ;
-            } else {
-                pz = minZ;
-            }
+            // Find the point furthest along the normal direction (positive vertex)
+            let px = plane[0] >= 0 ? maxX : minX;
+            let py = plane[1] >= 0 ? maxY : minY;
+            let pz = plane[2] >= 0 ? maxZ : minZ;
 
             // If the furthest point is outside, the box is outside
             const d = plane[0] * px + plane[1] * py + plane[2] * pz + plane[3];

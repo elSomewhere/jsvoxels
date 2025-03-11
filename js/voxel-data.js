@@ -118,6 +118,37 @@ class OctreeNode {
             }
         }
     }
+
+    // Serialize the node for worker transfer
+    serialize() {
+        const nodeData = {
+            x: this.x,
+            y: this.y,
+            z: this.z,
+            size: this.size,
+            voxelType: this.voxelType,
+            isLeaf: this.isLeaf
+        };
+
+        if (!this.isLeaf && this.children) {
+            nodeData.children = this.children.map(child => child.serialize());
+        }
+
+        return nodeData;
+    }
+
+    // Create node from serialized data
+    static deserialize(data) {
+        const node = new OctreeNode(data.x, data.y, data.z, data.size);
+        node.voxelType = data.voxelType;
+        node.isLeaf = data.isLeaf;
+
+        if (!data.isLeaf && data.children) {
+            node.children = data.children.map(childData => OctreeNode.deserialize(childData));
+        }
+
+        return node;
+    }
 }
 
 export class Chunk {
@@ -188,5 +219,46 @@ export class Chunk {
                 }
             }
         }
+    }
+
+    // Serialize chunk to flat array for worker transfer
+    serialize() {
+        const voxelData = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
+
+        // Fill array with voxel data
+        for (let y = 0; y < CHUNK_SIZE; y++) {
+            for (let z = 0; z < CHUNK_SIZE; z++) {
+                for (let x = 0; x < CHUNK_SIZE; x++) {
+                    const index = (y * CHUNK_SIZE * CHUNK_SIZE) + (z * CHUNK_SIZE) + x;
+                    voxelData[index] = this.getVoxel(x, y, z);
+                }
+            }
+        }
+
+        return voxelData;
+    }
+
+    // Serialize octree structure for worker transfer
+    serializeOctree() {
+        return this.rootNode.serialize();
+    }
+
+    // Deserialize from octree data
+    static deserializeOctree(data) {
+        const chunk = new Chunk();
+        chunk.rootNode = OctreeNode.deserialize(data);
+
+        // Recalculate non-empty voxel count
+        chunk.nonEmptyVoxelCount = 0;
+
+        chunk.rootNode.visitLeaves(node => {
+            if (node.voxelType !== 0) {
+                // Calculate number of voxels in this leaf node
+                const voxelCount = node.size * node.size * node.size;
+                chunk.nonEmptyVoxelCount += voxelCount;
+            }
+        });
+
+        return chunk;
     }
 }
