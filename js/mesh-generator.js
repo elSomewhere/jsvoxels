@@ -14,12 +14,11 @@ export class MeshGenerator {
         const normals = [];
         const colors = [];
         const indices = [];
-        const uvs = [];
         let indexOffset = 0;
 
         // Skip if chunk is empty
         if (chunk.isEmpty && chunk.isEmpty()) {
-            return { positions, normals, colors, indices, uvs };
+            return { positions, normals, colors, indices };
         }
 
         // For each of the 3 axis directions
@@ -99,13 +98,13 @@ export class MeshGenerator {
                 // Greedy mesh algorithm for positive direction
                 indexOffset = this.greedyMeshDirection(
                     maskPos, dim, wValue, wDir, uDir, vDir, posDirection[dim],
-                    posNormals[dim], positions, normals, colors, indices, uvs, indexOffset
+                    posNormals[dim], positions, normals, colors, indices, indexOffset
                 );
 
                 // Greedy mesh algorithm for negative direction
                 indexOffset = this.greedyMeshDirection(
                     maskNeg, dim, wValue, wDir, uDir, vDir, negDirection[dim],
-                    negNormals[dim], positions, normals, colors, indices, uvs, indexOffset
+                    negNormals[dim], positions, normals, colors, indices, indexOffset
                 );
             }
         }
@@ -114,8 +113,7 @@ export class MeshGenerator {
             positions,
             normals,
             colors,
-            indices,
-            uvs: uvs.length > 0 ? uvs : null
+            indices
         };
     }
 
@@ -175,7 +173,7 @@ export class MeshGenerator {
             return this.voxelTypes.isTransparent(voxelType);
         }
         // Default implementation for workers that might not have voxelTypes
-        return voxelType === 0;
+        return voxelType === 0 || voxelType === 5; // 5 is water
     }
 
     // Get color for a voxel type and face
@@ -203,39 +201,8 @@ export class MeshGenerator {
         }
     }
 
-    // Get texture UVs for a voxel type and face
-    getTextureUVs(voxelType, face, textureData) {
-        if (this.voxelTypes && this.voxelTypes.getTextureUVs) {
-            return this.voxelTypes.getTextureUVs(voxelType, face);
-        }
-
-        // Default implementation using texture data (for workers)
-        if (!textureData || !textureData[voxelType]) {
-            return [0, 0, 1, 0, 1, 1, 0, 1]; // Default UVs
-        }
-
-        let mapping = textureData[voxelType][face];
-        if (!mapping) {
-            mapping = textureData[voxelType].all;
-        }
-
-        if (!mapping) {
-            return [0, 0, 1, 0, 1, 1, 0, 1]; // Default UVs
-        }
-
-        const tileSize = 16;
-        const atlasSize = 256;
-
-        const u0 = mapping.tileX * tileSize / atlasSize;
-        const v0 = mapping.tileY * tileSize / atlasSize;
-        const u1 = (mapping.tileX + 1) * tileSize / atlasSize;
-        const v1 = (mapping.tileY + 1) * tileSize / atlasSize;
-
-        return [u0, v0, u1, v0, u1, v1, u0, v1];
-    }
-
     // Greedy mesh algorithm for a single direction
-    greedyMeshDirection(mask, dim, wValue, wDir, uDir, vDir, faceName, normal, positions, normals, colors, indices, uvs, indexOffset) {
+    greedyMeshDirection(mask, dim, wValue, wDir, uDir, vDir, faceName, normal, positions, normals, colors, indices, indexOffset) {
         const size = CHUNK_SIZE;
 
         // Create a visited mask
@@ -346,14 +313,6 @@ export class MeshGenerator {
                 // Add normals
                 for (let i = 0; i < 4; i++) {
                     normals.push(normal[0], normal[1], normal[2]);
-                }
-
-                // Add texture UVs if available
-                if (this.voxelTypes && this.voxelTypes.textureAtlas) {
-                    const faceUVs = this.voxelTypes.textureAtlas.getUVsForFace(voxelType, faceName);
-                    if (faceUVs && faceUVs.length > 0) {
-                        uvs.push(...faceUVs);
-                    }
                 }
 
                 // Add colors

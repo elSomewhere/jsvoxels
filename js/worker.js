@@ -8,9 +8,6 @@ import { MeshGenerator } from './mesh-generator.js';
 const noiseCache = new Map();
 let seed = Math.random() * 10000;
 
-// Texture data storage for worker
-let textureData = {};
-
 // Create mesh generator instance
 const meshGenerator = new MeshGenerator();
 
@@ -26,16 +23,11 @@ self.onmessage = function (e) {
 
     try {
         switch (type) {
-            case 'initializeTextures':
-                textureData = data.textureData;
-                result = { success: true };
-                break;
-
             case 'generateChunk':
                 result = generateChunk(data);
                 // If result has a buffer for transferring, add it to transferables
-                if (result.buffer) {
-                    transferables.push(result.buffer);
+                if (result.voxelData && result.voxelData.buffer) {
+                    transferables.push(result.voxelData.buffer);
                 }
                 break;
 
@@ -54,13 +46,18 @@ self.onmessage = function (e) {
                 if (result.indexBuffer) {
                     transferables.push(result.indexBuffer.buffer);
                 }
-                if (result.uvBuffer) {
-                    transferables.push(result.uvBuffer.buffer);
-                }
                 break;
 
             case 'createCrater':
                 result = createCrater(data);
+                // Add modified chunk buffers to transferables
+                if (result.modifiedChunks) {
+                    for (const chunk of result.modifiedChunks) {
+                        if (chunk.voxelData && chunk.voxelData.buffer) {
+                            transferables.push(chunk.voxelData.buffer);
+                        }
+                    }
+                }
                 break;
 
             case 'setSeed':
@@ -75,16 +72,13 @@ self.onmessage = function (e) {
         // Send result back to main thread
         self.postMessage({
             taskId,
-            type,
-            data: result,
-            transferables
+            result
         }, transferables);
 
     } catch (error) {
         // Send error back to main thread
         self.postMessage({
             taskId,
-            type,
             error: error.message
         });
     }
@@ -150,8 +144,7 @@ function generateChunk(data) {
         chunkX,
         chunkY,
         chunkZ,
-        voxelData,
-        buffer: voxelData.buffer
+        voxelData
     };
 }
 
@@ -179,6 +172,7 @@ function generateMesh(data) {
 
     // Function to get neighboring chunks
     function getNeighborChunk(nx, ny, nz) {
+        const neighborKey = `${nx},${ny},${nz}`;
         for (const neighbor of neighbors) {
             if (neighbor.x === nx && neighbor.y === ny && neighbor.z === nz) {
                 return {
@@ -195,24 +189,8 @@ function generateMesh(data) {
         return null;
     }
 
-    // Use the unified mesh generator
-    // Add texture data to the mesh generator for worker
-    meshGenerator.textureData = textureData;
-
-    // Override isVoxelTransparent and getVoxelColor to use textureData
-    const originalIsVoxelTransparent = meshGenerator.isVoxelTransparent;
-    meshGenerator.isVoxelTransparent = function (voxelType) {
-        return voxelType === 0 || voxelType === VoxelType.WATER;
-    };
-
-    meshGenerator.getTextureUVs = function (voxelType, face) {
-        return this.getTextureUVs(voxelType, face, textureData);
-    };
-
+    // Use the mesh generator
     const mesh = meshGenerator.generateMesh(chunk, x, y, z, getNeighborChunk);
-
-    // Restore original method
-    meshGenerator.isVoxelTransparent = originalIsVoxelTransparent;
 
     // Convert mesh data to typed arrays for efficient transfer
     const vertexBuffer = new Float32Array(mesh.positions);
@@ -220,20 +198,13 @@ function generateMesh(data) {
     const colorBuffer = new Float32Array(mesh.colors);
     const indexBuffer = new Uint16Array(mesh.indices);
 
-    // Create UVs buffer if available
-    let uvBuffer = null;
-    if (mesh.uvs && mesh.uvs.length > 0) {
-        uvBuffer = new Float32Array(mesh.uvs);
-    }
-
     return {
         x, y, z,
         vertexCount: mesh.indices.length,
         vertexBuffer,
         normalBuffer,
         colorBuffer,
-        indexBuffer,
-        uvBuffer
+        indexBuffer
     };
 }
 
@@ -251,9 +222,9 @@ function createCrater(data) {
                 const distSquared = dx * dx + dy * dy + dz * dz;
                 if (distSquared > radius * radius) continue;
 
-                const x = centerX + dx;
-                const y = centerY + dy;
-                const z = centerZ + dz;
+                const x = Math.floor(centerX + dx);
+                const y = Math.floor(centerY + dy);
+                const z = Math.floor(centerZ + dz);
 
                 // Calculate chunk coordinates
                 const chunkX = Math.floor(x / CHUNK_SIZE);

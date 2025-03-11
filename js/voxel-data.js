@@ -213,9 +213,8 @@ export class Chunk {
                 for (let x = 0; x < CHUNK_SIZE; x++) {
                     const index = (y * CHUNK_SIZE * CHUNK_SIZE) + (z * CHUNK_SIZE) + x;
                     const voxelType = voxelData[index];
-                    if (voxelType !== 0) {
-                        this.setVoxel(x, y, z, voxelType);
-                    }
+                    // Always update the voxel, even if it's 0 (air)
+                    this.setVoxel(x, y, z, voxelType);
                 }
             }
         }

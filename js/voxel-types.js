@@ -8,10 +8,8 @@ export const VoxelType = {
 };
 
 export class VoxelTypeManager {
-    constructor(textureAtlas = null) {
+    constructor() {
         this.types = new Map();
-        this.textureAtlas = textureAtlas;
-        this.useTextures = textureAtlas !== null;
         this.setupDefaultTypes();
     }
 
@@ -21,10 +19,7 @@ export class VoxelTypeManager {
             name: "Air",
             transparent: true,
             solid: false,
-            getColor: () => [0, 0, 0, 0],
-            textureMapping: {
-                all: { tileX: 0, tileY: 0 }
-            }
+            getColor: () => [0, 0, 0, 0]
         });
 
         // Grass
@@ -36,11 +31,6 @@ export class VoxelTypeManager {
                 if (face === 'top') return [0.3, 0.75, 0.3, 1.0]; // Top - green
                 if (face === 'bottom') return [0.5, 0.3, 0.1, 1.0]; // Bottom - dirt color
                 return [0.4, 0.5, 0.2, 1.0]; // Sides - grass side
-            },
-            textureMapping: {
-                top: { tileX: 0, tileY: 0 },
-                side: { tileX: 1, tileY: 0 },
-                bottom: { tileX: 2, tileY: 0 }
             }
         });
 
@@ -49,10 +39,7 @@ export class VoxelTypeManager {
             name: "Bedrock",
             transparent: false,
             solid: true,
-            getColor: () => [0.2, 0.2, 0.2, 1.0],
-            textureMapping: {
-                all: { tileX: 4, tileY: 0 }
-            }
+            getColor: () => [0.2, 0.2, 0.2, 1.0]
         });
 
         // Stone
@@ -60,10 +47,7 @@ export class VoxelTypeManager {
             name: "Stone",
             transparent: false,
             solid: true,
-            getColor: () => [0.5, 0.5, 0.5, 1.0],
-            textureMapping: {
-                all: { tileX: 3, tileY: 0 }
-            }
+            getColor: () => [0.5, 0.5, 0.5, 1.0]
         });
 
         // Dirt
@@ -71,10 +55,7 @@ export class VoxelTypeManager {
             name: "Dirt",
             transparent: false,
             solid: true,
-            getColor: () => [0.5, 0.3, 0.1, 1.0],
-            textureMapping: {
-                all: { tileX: 2, tileY: 0 }
-            }
+            getColor: () => [0.5, 0.3, 0.1, 1.0]
         });
 
         // Water
@@ -82,10 +63,7 @@ export class VoxelTypeManager {
             name: "Water",
             transparent: true,
             solid: true, // Semi-solid for physics
-            getColor: () => [0.0, 0.3, 0.8, 0.7],
-            textureMapping: {
-                all: { tileX: 5, tileY: 0 }
-            }
+            getColor: () => [0.0, 0.3, 0.8, 0.7]
         });
     }
 
@@ -112,37 +90,15 @@ export class VoxelTypeManager {
         return type.getColor(face);
     }
 
-    // Get texture mapping for a voxel type and face
-    getTextureMapping(id, face) {
-        const type = this.getType(id);
-
-        if (!type.textureMapping) {
-            return null;
-        }
-
-        // First check for specific face mapping
-        if (type.textureMapping[face]) {
-            return type.textureMapping[face];
-        }
-
-        // Fall back to 'all' mapping
-        if (type.textureMapping.all) {
-            return type.textureMapping.all;
-        }
-
-        return null;
-    }
-
-    // Get serializable texture data for workers
-    getSerializableTextureData() {
-        const texData = {};
-
+    // Get serializable data for workers
+    getSerializableData() {
+        const data = {};
         for (const [id, type] of this.types.entries()) {
-            if (type.textureMapping) {
-                texData[id] = type.textureMapping;
-            }
+            data[id] = {
+                transparent: type.transparent,
+                solid: type.solid
+            };
         }
-
-        return texData;
+        return data;
     }
 }

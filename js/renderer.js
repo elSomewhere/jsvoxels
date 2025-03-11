@@ -13,7 +13,6 @@ export class Renderer {
         }
 
         this.programInfo = null;
-        this.texturedProgramInfo = null;
         this.currentFrustum = null;
         this.initWebGL();
     }
@@ -82,75 +81,8 @@ export class Renderer {
             }
         `;
 
-        // Create textured shader program
-        const texturedVsSource = `
-            attribute vec4 aVertexPosition;
-            attribute vec3 aVertexNormal;
-            attribute vec2 aTextureCoord;
-
-            uniform mat4 uModelViewMatrix;
-            uniform mat4 uProjectionMatrix;
-            uniform mat4 uNormalMatrix;
-
-            varying highp vec3 vNormal;
-            varying highp vec2 vTextureCoord;
-            varying highp vec3 vPosition;
-
-            void main(void) {
-                gl_Position = uProjectionMatrix * uModelViewMatrix * aVertexPosition;
-                vNormal = (uNormalMatrix * vec4(aVertexNormal, 0.0)).xyz;
-                vTextureCoord = aTextureCoord;
-                vPosition = (uModelViewMatrix * aVertexPosition).xyz;
-            }
-        `;
-
-        const texturedFsSource = `
-            precision highp float;
-            
-            varying highp vec3 vNormal;
-            varying highp vec2 vTextureCoord;
-            varying highp vec3 vPosition;
-            
-            uniform sampler2D uSampler;
-            uniform vec3 uLightDirection;
-            uniform vec3 uViewPosition;
-            uniform float uFogNear;
-            uniform float uFogFar;
-            uniform vec3 uFogColor;
-            
-            void main(void) {
-                // Get texture color
-                vec4 texColor = texture2D(uSampler, vTextureCoord);
-                
-                // Skip transparent pixels
-                if (texColor.a < 0.1) {
-                    discard;
-                }
-                
-                // Calculate lighting
-                vec3 normal = normalize(vNormal);
-                vec3 lightDir = normalize(uLightDirection);
-                float diffuse = max(dot(normal, lightDir), 0.0);
-                
-                // Add ambient light
-                float ambient = 0.3;
-                float lighting = diffuse + ambient;
-                
-                // Apply lighting to texture
-                vec4 litColor = vec4(texColor.rgb * lighting, texColor.a);
-                
-                // Apply fog effect
-                float dist = length(vPosition);
-                float fogFactor = smoothstep(uFogNear, uFogFar, dist);
-                vec3 finalColor = mix(litColor.rgb, uFogColor, fogFactor);
-                
-                gl_FragColor = vec4(finalColor, litColor.a);
-            }
-        `;
-
-        // Initialize the shader programs
+        // Initialize the shader program
         const shaderProgram = this.initShaderProgram(vsSource, fsSource);
-        const texturedShaderProgram = this.initShaderProgram(texturedVsSource, texturedFsSource);
 
         // Store program info
         this.programInfo = {
@@ -169,26 +101,6 @@ export class Renderer {
                 fogNear: this.gl.getUniformLocation(shaderProgram, 'uFogNear'),
                 fogFar: this.gl.getUniformLocation(shaderProgram, 'uFogFar'),
                 fogColor: this.gl.getUniformLocation(shaderProgram, 'uFogColor'),
-            },
-        };
-
-        this.texturedProgramInfo = {
-            program: texturedShaderProgram,
-            attribLocations: {
-                vertexPosition: this.gl.getAttribLocation(texturedShaderProgram, 'aVertexPosition'),
-                vertexNormal: this.gl.getAttribLocation(texturedShaderProgram, 'aVertexNormal'),
-                textureCoord: this.gl.getAttribLocation(texturedShaderProgram, 'aTextureCoord'),
-            },
-            uniformLocations: {
-                projectionMatrix: this.gl.getUniformLocation(texturedShaderProgram, 'uProjectionMatrix'),
-                modelViewMatrix: this.gl.getUniformLocation(texturedShaderProgram, 'uModelViewMatrix'),
-                normalMatrix: this.gl.getUniformLocation(texturedShaderProgram, 'uNormalMatrix'),
-                sampler: this.gl.getUniformLocation(texturedShaderProgram, 'uSampler'),
-                lightDirection: this.gl.getUniformLocation(texturedShaderProgram, 'uLightDirection'),
-                viewPosition: this.gl.getUniformLocation(texturedShaderProgram, 'uViewPosition'),
-                fogNear: this.gl.getUniformLocation(texturedShaderProgram, 'uFogNear'),
-                fogFar: this.gl.getUniformLocation(texturedShaderProgram, 'uFogFar'),
-                fogColor: this.gl.getUniformLocation(texturedShaderProgram, 'uFogColor'),
             },
         };
 
@@ -233,8 +145,8 @@ export class Renderer {
     }
 
     // Create a mesh in WebGL using buffer manager
-    createMesh(meshData, worldOffset, useTextures = false) {
-        const { positions, normals, colors, indices, uvs } = meshData;
+    createMesh(meshData, worldOffset) {
+        const { positions, normals, colors, indices } = meshData;
         const buffers = {};
         const bufferIds = [];
 
@@ -250,18 +162,10 @@ export class Renderer {
             buffers.normal = normBuffer.buffer;
             bufferIds.push(normBuffer.id);
 
-            // Create color buffer or UV buffer depending on mode
-            if (useTextures && uvs && uvs.length > 0) {
-                const uvBuffer = this.bufferManager.getBuffer('uv', new Float32Array(uvs));
-                buffers.uv = uvBuffer.buffer;
-                bufferIds.push(uvBuffer.id);
-                buffers.textured = true;
-            } else {
-                const colorBuffer = this.bufferManager.getBuffer('color', new Float32Array(colors));
-                buffers.color = colorBuffer.buffer;
-                bufferIds.push(colorBuffer.id);
-                buffers.textured = false;
-            }
+            // Create color buffer
+            const colorBuffer = this.bufferManager.getBuffer('color', new Float32Array(colors));
+            buffers.color = colorBuffer.buffer;
+            bufferIds.push(colorBuffer.id);
 
             // Create index buffer
             const idxBuffer = this.bufferManager.getBuffer('index', new Uint16Array(indices));
@@ -281,20 +185,11 @@ export class Renderer {
             this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(normals), this.gl.STATIC_DRAW);
             buffers.normal = normalBuffer;
 
-            // Create color buffer or UV buffer depending on mode
-            if (useTextures && uvs && uvs.length > 0) {
-                const uvBuffer = this.gl.createBuffer();
-                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, uvBuffer);
-                this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(uvs), this.gl.STATIC_DRAW);
-                buffers.uv = uvBuffer;
-                buffers.textured = true;
-            } else {
-                const colorBuffer = this.gl.createBuffer();
-                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, colorBuffer);
-                this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(colors), this.gl.STATIC_DRAW);
-                buffers.color = colorBuffer;
-                buffers.textured = false;
-            }
+            // Create color buffer
+            const colorBuffer = this.gl.createBuffer();
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, colorBuffer);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(colors), this.gl.STATIC_DRAW);
+            buffers.color = colorBuffer;
 
             // Create index buffer
             const indexBuffer = this.gl.createBuffer();
@@ -313,6 +208,15 @@ export class Renderer {
             maxZ: worldOffset[2] + CHUNK_SIZE
         };
 
+        // Check for water to mark as transparent
+        let hasWater = false;
+        for (let i = 0; i < colors.length; i += 4) {
+            if (colors[i + 3] < 0.95) { // Check alpha value
+                hasWater = true;
+                break;
+            }
+        }
+
         // Return mesh object
         return {
             buffers,
@@ -320,7 +224,7 @@ export class Renderer {
             vertexCount: indices.length,
             worldOffset,
             bounds,
-            textured: buffers.textured
+            transparent: hasWater
         };
     }
 
@@ -337,15 +241,7 @@ export class Renderer {
             // Delete buffers directly
             this.gl.deleteBuffer(mesh.buffers.position);
             this.gl.deleteBuffer(mesh.buffers.normal);
-
-            if (mesh.buffers.color) {
-                this.gl.deleteBuffer(mesh.buffers.color);
-            }
-
-            if (mesh.buffers.uv) {
-                this.gl.deleteBuffer(mesh.buffers.uv);
-            }
-
+            this.gl.deleteBuffer(mesh.buffers.color);
             this.gl.deleteBuffer(mesh.buffers.indices);
         }
     }
@@ -530,79 +426,35 @@ export class Renderer {
         // Skip if no meshes
         if (meshes.length === 0) return;
 
-        // Split meshes by shader type
-        const coloredMeshes = meshes.filter(m => !m.textured);
-        const texturedMeshes = meshes.filter(m => m.textured);
+        this.gl.useProgram(this.programInfo.program);
 
-        // Render colored meshes
-        if (coloredMeshes.length > 0) {
-            this.gl.useProgram(this.programInfo.program);
+        // Set shared uniforms
+        this.gl.uniformMatrix4fv(
+            this.programInfo.uniformLocations.projectionMatrix,
+            false, projectionMatrix);
 
-            // Set shared uniforms
-            this.gl.uniformMatrix4fv(
-                this.programInfo.uniformLocations.projectionMatrix,
-                false, projectionMatrix);
+        this.gl.uniform3fv(
+            this.programInfo.uniformLocations.lightDirection,
+            [0.5, 1.0, 0.3]);
 
-            this.gl.uniform3fv(
-                this.programInfo.uniformLocations.lightDirection,
-                [0.5, 1.0, 0.3]);
+        // Set camera position for view-dependent effects
+        this.gl.uniform3fv(
+            this.programInfo.uniformLocations.viewPosition,
+            [-viewMatrix[12], -viewMatrix[13], -viewMatrix[14]]);
 
-            // Set camera position for view-dependent effects
-            this.gl.uniform3fv(
-                this.programInfo.uniformLocations.viewPosition,
-                [-viewMatrix[12], -viewMatrix[13], -viewMatrix[14]]);
+        // Set fog uniforms
+        this.gl.uniform1f(
+            this.programInfo.uniformLocations.fogNear,
+            CHUNK_SIZE * (RENDER_DISTANCE - 2));
+        this.gl.uniform1f(
+            this.programInfo.uniformLocations.fogFar,
+            CHUNK_SIZE * RENDER_DISTANCE);
+        this.gl.uniform3fv(
+            this.programInfo.uniformLocations.fogColor,
+            [0.6, 0.8, 1.0]); // Sky color
 
-            // Set fog uniforms
-            this.gl.uniform1f(
-                this.programInfo.uniformLocations.fogNear,
-                CHUNK_SIZE * (RENDER_DISTANCE - 2));
-            this.gl.uniform1f(
-                this.programInfo.uniformLocations.fogFar,
-                CHUNK_SIZE * RENDER_DISTANCE);
-            this.gl.uniform3fv(
-                this.programInfo.uniformLocations.fogColor,
-                [0.6, 0.8, 1.0]); // Sky color
-
-            for (const mesh of coloredMeshes) {
-                this.renderColoredMesh(mesh, viewMatrix);
-            }
-        }
-
-        // Render textured meshes
-        if (texturedMeshes.length > 0) {
-            this.gl.useProgram(this.texturedProgramInfo.program);
-
-            // Set shared uniforms
-            this.gl.uniformMatrix4fv(
-                this.texturedProgramInfo.uniformLocations.projectionMatrix,
-                false, projectionMatrix);
-
-            this.gl.uniform3fv(
-                this.texturedProgramInfo.uniformLocations.lightDirection,
-                [0.5, 1.0, 0.3]);
-
-            // Set camera position for view-dependent effects
-            this.gl.uniform3fv(
-                this.texturedProgramInfo.uniformLocations.viewPosition,
-                [-viewMatrix[12], -viewMatrix[13], -viewMatrix[14]]);
-
-            // Set texture sampler
-            this.gl.uniform1i(this.texturedProgramInfo.uniformLocations.sampler, 0);
-
-            // Set fog uniforms
-            this.gl.uniform1f(
-                this.texturedProgramInfo.uniformLocations.fogNear,
-                CHUNK_SIZE * (RENDER_DISTANCE - 2));
-            this.gl.uniform1f(
-                this.texturedProgramInfo.uniformLocations.fogFar,
-                CHUNK_SIZE * RENDER_DISTANCE);
-            this.gl.uniform3fv(
-                this.texturedProgramInfo.uniformLocations.fogColor,
-                [0.6, 0.8, 1.0]); // Sky color
-
-            for (const mesh of texturedMeshes) {
-                this.renderTexturedMesh(mesh, viewMatrix);
-            }
+        for (const mesh of meshes) {
+            this.renderColoredMesh(mesh, viewMatrix);
         }
     }
 
@@ -651,61 +503,6 @@ export class Renderer {
             false, modelViewMatrix);
         this.gl.uniformMatrix4fv(
             this.programInfo.uniformLocations.normalMatrix,
-            false, normalMatrix);
-
-        // Draw the chunk
-        this.gl.drawElements(
-            this.gl.TRIANGLES,
-            mesh.vertexCount,
-            this.gl.UNSIGNED_SHORT,
-            0);
-    }
-
-    // Render a textured mesh
-    renderTexturedMesh(mesh, viewMatrix) {
-        // Create model matrix with world offset
-        const modelMatrix = mat4.create();
-        mat4.translate(modelMatrix, modelMatrix, mesh.worldOffset);
-
-        // Combine with view matrix
-        const modelViewMatrix = mat4.create();
-        mat4.multiply(modelViewMatrix, viewMatrix, modelMatrix);
-
-        // Normal matrix
-        const normalMatrix = mat4.create();
-        mat4.invert(normalMatrix, modelViewMatrix);
-        mat4.transpose(normalMatrix, normalMatrix);
-
-        // Bind position buffer
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.buffers.position);
-        this.gl.vertexAttribPointer(
-            this.texturedProgramInfo.attribLocations.vertexPosition,
-            3, this.gl.FLOAT, false, 0, 0);
-        this.gl.enableVertexAttribArray(this.texturedProgramInfo.attribLocations.vertexPosition);
-
-        // Bind normal buffer
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.buffers.normal);
-        this.gl.vertexAttribPointer(
-            this.texturedProgramInfo.attribLocations.vertexNormal,
-            3, this.gl.FLOAT, false, 0, 0);
-        this.gl.enableVertexAttribArray(this.texturedProgramInfo.attribLocations.vertexNormal);
-
-        // Bind UV buffer
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.buffers.uv);
-        this.gl.vertexAttribPointer(
-            this.texturedProgramInfo.attribLocations.textureCoord,
-            2, this.gl.FLOAT, false, 0, 0);
-        this.gl.enableVertexAttribArray(this.texturedProgramInfo.attribLocations.textureCoord);
-
-        // Bind index buffer
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.buffers.indices);
-
-        // Set uniforms
-        this.gl.uniformMatrix4fv(
-            this.texturedProgramInfo.uniformLocations.modelViewMatrix,
-            false, modelViewMatrix);
-        this.gl.uniformMatrix4fv(
-            this.texturedProgramInfo.uniformLocations.normalMatrix,
             false, normalMatrix);
 
         // Draw the chunk
