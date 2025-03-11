@@ -1,5 +1,6 @@
 // worker-manager.js
 // Manages a pool of web workers for offloading heavy tasks
+import { CHUNK_SIZE } from './constants.js';
 
 export class WorkerManager {
     constructor(workerCount = navigator.hardwareConcurrency || 4) {
@@ -34,7 +35,9 @@ export class WorkerManager {
         // Create worker with inline code instead of trying to load external files
         const workerScript = `
         // Worker variables
-        const CHUNK_SIZE = 32;
+        // Import CHUNK_SIZE from constants
+        const CHUNK_SIZE = ${CHUNK_SIZE}; // Use the same CHUNK_SIZE as the main thread
+        
         const VoxelType = {
             AIR: 0,
             GRASS: 1,
@@ -140,7 +143,7 @@ export class WorkerManager {
             return chunk.serialize();
         }
         
-        // Simple mesh generation code
+        // Simple mesh generation code - This can be simplified since we'll use the unified mesher
         function generateMeshFromChunk(chunk, chunkX, chunkY, chunkZ, neighbors) {
             // Create a basic mesh with just one cube per voxel
             const positions = [];

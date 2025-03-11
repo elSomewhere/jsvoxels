@@ -1,23 +1,25 @@
+// mesh-generator.js - Unified meshing implementation for both main thread and workers
 import { CHUNK_SIZE } from './constants.js';
 import { debugLog } from './math-utils.js';
-import { VoxelType } from './voxel-types.js';
 
-export class Mesher {
-    constructor(voxelTypeManager) {
-        this.voxelTypes = voxelTypeManager;
+// Export a class that handles meshing for both main thread and workers
+export class MeshGenerator {
+    constructor(voxelTypes) {
+        this.voxelTypes = voxelTypes;
     }
 
-    // Generate mesh using greedy meshing algorithm
+    // Main meshing function that works for both environments
     generateMesh(chunk, chunkX, chunkY, chunkZ, getNeighborChunk) {
         const positions = [];
         const normals = [];
         const colors = [];
         const indices = [];
+        const uvs = [];
         let indexOffset = 0;
 
         // Skip if chunk is empty
-        if (chunk.isEmpty()) {
-            return { positions, normals, colors, indices };
+        if (chunk.isEmpty && chunk.isEmpty()) {
+            return { positions, normals, colors, indices, uvs };
         }
 
         // For each of the 3 axis directions
@@ -45,12 +47,12 @@ export class Mesher {
             // Iterate through each slice of the dimension
             for (let wValue = 0; wValue < CHUNK_SIZE; wValue++) {
                 // Two masks for each direction (positive and negative)
-                const maskPos = Array(CHUNK_SIZE + 1).fill().map(() =>
-                    Array(CHUNK_SIZE + 1).fill({ voxelType: 0, transparent: true, visible: false })
+                const maskPos = Array(CHUNK_SIZE).fill().map(() =>
+                    Array(CHUNK_SIZE).fill({ voxelType: 0, transparent: true, visible: false })
                 );
 
-                const maskNeg = Array(CHUNK_SIZE + 1).fill().map(() =>
-                    Array(CHUNK_SIZE + 1).fill({ voxelType: 0, transparent: true, visible: false })
+                const maskNeg = Array(CHUNK_SIZE).fill().map(() =>
+                    Array(CHUNK_SIZE).fill({ voxelType: 0, transparent: true, visible: false })
                 );
 
                 // Fill both masks for this slice
@@ -62,61 +64,16 @@ export class Mesher {
                         const z1 = (dim === 0) ? vValue : ((dim === 1) ? vValue : wValue);
 
                         // Get current voxel
-                        const voxel = chunk.getVoxel(x1, y1, z1);
-                        const isTransparent1 = this.voxelTypes.isTransparent(voxel);
+                        const voxel = this.getVoxel(chunk, x1, y1, z1, chunkX, chunkY, chunkZ, getNeighborChunk);
+                        const isTransparent1 = this.isVoxelTransparent(voxel);
 
                         // Get adjacent voxel in positive direction
                         let x2 = x1 + wDir[0];
                         let y2 = y1 + wDir[1];
                         let z2 = z1 + wDir[2];
 
-                        let voxelPos;
-
-                        // Check if the adjacent voxel is in another chunk
-                        if (x2 < 0 || x2 >= CHUNK_SIZE || y2 < 0 || y2 >= CHUNK_SIZE || z2 < 0 || z2 >= CHUNK_SIZE) {
-                            // Calculate neighbor chunk coordinates
-                            let neighborChunkX = chunkX;
-                            let neighborChunkY = chunkY;
-                            let neighborChunkZ = chunkZ;
-
-                            if (x2 < 0) {
-                                neighborChunkX--;
-                                x2 += CHUNK_SIZE;
-                            } else if (x2 >= CHUNK_SIZE) {
-                                neighborChunkX++;
-                                x2 -= CHUNK_SIZE;
-                            }
-
-                            if (y2 < 0) {
-                                neighborChunkY--;
-                                y2 += CHUNK_SIZE;
-                            } else if (y2 >= CHUNK_SIZE) {
-                                neighborChunkY++;
-                                y2 -= CHUNK_SIZE;
-                            }
-
-                            if (z2 < 0) {
-                                neighborChunkZ--;
-                                z2 += CHUNK_SIZE;
-                            } else if (z2 >= CHUNK_SIZE) {
-                                neighborChunkZ++;
-                                z2 -= CHUNK_SIZE;
-                            }
-
-                            // Get neighbor chunk with safer handling
-                            const neighborChunk = getNeighborChunk(neighborChunkX, neighborChunkY, neighborChunkZ);
-
-                            // Add more detailed logging for debugging
-                            if (!neighborChunk && console && console.debug) {
-                                console.debug(`Missing neighbor chunk at ${neighborChunkX},${neighborChunkY},${neighborChunkZ} from ${chunkX},${chunkY},${chunkZ}`);
-                            }
-
-                            voxelPos = neighborChunk ? neighborChunk.getVoxel(x2, y2, z2) : 0;
-                        } else {
-                            voxelPos = chunk.getVoxel(x2, y2, z2);
-                        }
-
-                        const isTransparent2 = this.voxelTypes.isTransparent(voxelPos);
+                        const voxelPos = this.getVoxel(chunk, x2, y2, z2, chunkX, chunkY, chunkZ, getNeighborChunk);
+                        const isTransparent2 = this.isVoxelTransparent(voxelPos);
 
                         // Determine if faces should be created
                         // For positive direction: current solid, next transparent
@@ -142,13 +99,13 @@ export class Mesher {
                 // Greedy mesh algorithm for positive direction
                 indexOffset = this.greedyMeshDirection(
                     maskPos, dim, wValue, wDir, uDir, vDir, posDirection[dim],
-                    posNormals[dim], positions, normals, colors, indices, indexOffset
+                    posNormals[dim], positions, normals, colors, indices, uvs, indexOffset
                 );
 
                 // Greedy mesh algorithm for negative direction
                 indexOffset = this.greedyMeshDirection(
                     maskNeg, dim, wValue, wDir, uDir, vDir, negDirection[dim],
-                    negNormals[dim], positions, normals, colors, indices, indexOffset
+                    negNormals[dim], positions, normals, colors, indices, uvs, indexOffset
                 );
             }
         }
@@ -157,12 +114,128 @@ export class Mesher {
             positions,
             normals,
             colors,
-            indices
+            indices,
+            uvs: uvs.length > 0 ? uvs : null
         };
     }
 
+    // Helper method to get voxel type, handling neighbor chunks correctly
+    getVoxel(chunk, x, y, z, chunkX, chunkY, chunkZ, getNeighborChunk) {
+        if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_SIZE || z < 0 || z >= CHUNK_SIZE) {
+            // Calculate neighbor chunk coordinates
+            let neighborChunkX = chunkX;
+            let neighborChunkY = chunkY;
+            let neighborChunkZ = chunkZ;
+
+            let nx = x;
+            let ny = y;
+            let nz = z;
+
+            if (x < 0) {
+                neighborChunkX--;
+                nx = CHUNK_SIZE + x; // Wrap around to the other side
+            } else if (x >= CHUNK_SIZE) {
+                neighborChunkX++;
+                nx = x - CHUNK_SIZE;
+            }
+
+            if (y < 0) {
+                neighborChunkY--;
+                ny = CHUNK_SIZE + y; // Wrap around to the other side
+            } else if (y >= CHUNK_SIZE) {
+                neighborChunkY++;
+                ny = y - CHUNK_SIZE;
+            }
+
+            if (z < 0) {
+                neighborChunkZ--;
+                nz = CHUNK_SIZE + z; // Wrap around to the other side
+            } else if (z >= CHUNK_SIZE) {
+                neighborChunkZ++;
+                nz = z - CHUNK_SIZE;
+            }
+
+            // Try to get the neighbor chunk
+            const neighborChunk = getNeighborChunk(neighborChunkX, neighborChunkY, neighborChunkZ);
+            if (!neighborChunk) {
+                return 0; // Assume air if no neighbor chunk
+            }
+
+            // Get voxel from neighbor chunk
+            return neighborChunk.getVoxel(nx, ny, nz);
+        }
+
+        // Get voxel from current chunk
+        return chunk.getVoxel(x, y, z);
+    }
+
+    // Check if a voxel type is transparent
+    isVoxelTransparent(voxelType) {
+        if (this.voxelTypes) {
+            return this.voxelTypes.isTransparent(voxelType);
+        }
+        // Default implementation for workers that might not have voxelTypes
+        return voxelType === 0;
+    }
+
+    // Get color for a voxel type and face
+    getVoxelColor(voxelType, face) {
+        if (this.voxelTypes) {
+            return this.voxelTypes.getColor(voxelType, face);
+        }
+
+        // Default implementation for workers
+        switch (voxelType) {
+            case 1: // GRASS
+                if (face === 'top') return [0.3, 0.75, 0.3, 1.0];
+                if (face === 'bottom') return [0.5, 0.3, 0.1, 1.0];
+                return [0.4, 0.5, 0.2, 1.0];
+            case 2: // BEDROCK
+                return [0.2, 0.2, 0.2, 1.0];
+            case 3: // STONE
+                return [0.5, 0.5, 0.5, 1.0];
+            case 4: // DIRT
+                return [0.5, 0.3, 0.1, 1.0];
+            case 5: // WATER
+                return [0.0, 0.3, 0.8, 0.7];
+            default:
+                return [1.0, 0.0, 1.0, 1.0]; // Magenta for unknown
+        }
+    }
+
+    // Get texture UVs for a voxel type and face
+    getTextureUVs(voxelType, face, textureData) {
+        if (this.voxelTypes && this.voxelTypes.getTextureUVs) {
+            return this.voxelTypes.getTextureUVs(voxelType, face);
+        }
+
+        // Default implementation using texture data (for workers)
+        if (!textureData || !textureData[voxelType]) {
+            return [0, 0, 1, 0, 1, 1, 0, 1]; // Default UVs
+        }
+
+        let mapping = textureData[voxelType][face];
+        if (!mapping) {
+            mapping = textureData[voxelType].all;
+        }
+
+        if (!mapping) {
+            return [0, 0, 1, 0, 1, 1, 0, 1]; // Default UVs
+        }
+
+        const tileSize = 16;
+        const atlasSize = 256;
+
+        const u0 = mapping.tileX * tileSize / atlasSize;
+        const v0 = mapping.tileY * tileSize / atlasSize;
+        const u1 = (mapping.tileX + 1) * tileSize / atlasSize;
+        const v1 = (mapping.tileY + 1) * tileSize / atlasSize;
+
+        return [u0, v0, u1, v0, u1, v1, u0, v1];
+    }
+
     // Greedy mesh algorithm for a single direction
-    greedyMeshDirection(mask, dim, wValue, wDir, uDir, vDir, faceName, normal, positions, normals, colors, indices, indexOffset) {
+    greedyMeshDirection(mask, dim, wValue, wDir, uDir, vDir, faceName, normal, positions, normals, colors, indices, uvs, indexOffset) {
         const size = CHUNK_SIZE;
 
         // Create a visited mask
@@ -178,13 +251,15 @@ export class Mesher {
 
                 // Get voxel type at this position
                 const voxelType = mask[vStart][uStart].voxelType;
+                const isTransparentVoxel = mask[vStart][uStart].transparent;
 
                 // Find maximum width (u direction)
                 let uEnd = uStart;
                 while (uEnd + 1 < size &&
                     !visited[vStart][uEnd + 1] &&
                     mask[vStart][uEnd + 1].visible &&
-                    mask[vStart][uEnd + 1].voxelType === voxelType) {
+                    mask[vStart][uEnd + 1].voxelType === voxelType &&
+                    mask[vStart][uEnd + 1].transparent === isTransparentVoxel) {
                     uEnd++;
                 }
 
@@ -197,7 +272,8 @@ export class Mesher {
                     for (let u = uStart; u <= uEnd; u++) {
                         if (visited[vEnd + 1][u] ||
                             !mask[vEnd + 1][u].visible ||
-                            mask[vEnd + 1][u].voxelType !== voxelType) {
+                            mask[vEnd + 1][u].voxelType !== voxelType ||
+                            mask[vEnd + 1][u].transparent !== isTransparentVoxel) {
                             canExpandV = false;
                             break;
                         }
@@ -222,21 +298,21 @@ export class Mesher {
                 // Calculate corner positions based on dimension
                 let x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4;
 
-                // Set the w coordinate
+                // Set the w coordinate with proper offset for the face direction
                 const w = wValue + (dim === 0 ? wDir[0] : 0) + (dim === 1 ? wDir[1] : 0) + (dim === 2 ? wDir[2] : 0);
 
                 // Determine coordinates based on dimension
                 if (dim === 0) { // X dimension
                     // Order: bottom-left, bottom-right, top-right, top-left
                     x1 = x2 = x3 = x4 = w;
-                    z1 = vStart;
                     y1 = uStart;
-                    z2 = vStart;
+                    z1 = vStart;
                     y2 = uStart + width;
-                    z3 = vStart + height;
+                    z2 = vStart;
                     y3 = uStart + width;
-                    z4 = vStart + height;
+                    z3 = vStart + height;
                     y4 = uStart;
+                    z4 = vStart + height;
                 } else if (dim === 1) { // Y dimension
                     y1 = y2 = y3 = y4 = w;
                     x1 = uStart;
@@ -259,18 +335,6 @@ export class Mesher {
                     y4 = vStart + height;
                 }
 
-                // Get color from voxel type manager
-                const color = this.voxelTypes.getColor(voxelType, faceName);
-
-                // Simple directional shading
-                const shade = 1.0 - 0.2 * Math.abs(dim);
-                const finalColor = [
-                    color[0] * shade,
-                    color[1] * shade,
-                    color[2] * shade,
-                    color[3]
-                ];
-
                 // Add vertices for this quad
                 positions.push(
                     x1, y1, z1,
@@ -283,6 +347,26 @@ export class Mesher {
                 for (let i = 0; i < 4; i++) {
                     normals.push(normal[0], normal[1], normal[2]);
                 }
+
+                // Add texture UVs if available
+                if (this.voxelTypes && this.voxelTypes.textureAtlas) {
+                    const faceUVs = this.voxelTypes.textureAtlas.getUVsForFace(voxelType, faceName);
+                    if (faceUVs && faceUVs.length > 0) {
+                        uvs.push(...faceUVs);
+                    }
+                }
+
+                // Add colors
+                const color = this.getVoxelColor(voxelType, faceName);
+
+                // Simple directional shading
+                const shade = 1.0 - 0.2 * Math.abs(dim);
+                const finalColor = [
+                    color[0] * shade,
+                    color[1] * shade,
+                    color[2] * shade,
+                    color[3]
+                ];
 
                 // Add colors
                 for (let i = 0; i < 4; i++) {
