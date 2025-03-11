@@ -4,9 +4,8 @@ import { VoxelType } from './voxel-types.js';
 import { MeshGenerator } from './mesh-generator.js';
 
 export class Mesher {
-    constructor(voxelTypeManager, textureAtlas) {
+    constructor(voxelTypeManager) {
         this.voxelTypes = voxelTypeManager;
-        this.textureAtlas = textureAtlas;
 
         // Create the mesh generator instance
         this.meshGenerator = new MeshGenerator(this.voxelTypes);

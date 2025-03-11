@@ -132,9 +132,8 @@ export class WorkerPool {
         this.priorityTaskQueue = [];
         this.callbacks.clear();
     }
-    // Helper method to set up a worker
-    // Replace the setupWorker method in worker-pool.js with this:
 
+    // Helper method to set up a worker
     setupWorker(worker) {
         worker.onmessage = (e) => {
             // Handle multiple possible message formats
@@ -142,8 +141,8 @@ export class WorkerPool {
 
             if (e.data.taskId !== undefined) {
                 taskId = e.data.taskId;
-                // Handle worker.js format where result is in data
-                result = e.data.data || e.data.result;
+                // Get result from the appropriate field
+                result = e.data.result;
             } else {
                 console.error("Received message without taskId:", e.data);
                 return;
@@ -152,7 +151,11 @@ export class WorkerPool {
             // Execute callback for this task
             if (this.callbacks.has(taskId)) {
                 const callback = this.callbacks.get(taskId);
-                callback(result);
+                try {
+                    callback(result);
+                } catch (error) {
+                    console.error("Error in task callback:", error);
+                }
                 this.callbacks.delete(taskId);
             } else {
                 console.warn(`No callback found for task ${taskId}`);
@@ -173,9 +176,10 @@ export class WorkerPool {
             console.error("Worker error:", err);
 
             // Put the worker back in the idle pool
-            // (May want to restart it instead depending on the error)
-            this.idleWorkers.push(worker);
-            this.activeTaskCount--;
+            if (!this.idleWorkers.includes(worker)) {
+                this.idleWorkers.push(worker);
+                this.activeTaskCount--;
+            }
         };
 
         this.idleWorkers.push(worker);

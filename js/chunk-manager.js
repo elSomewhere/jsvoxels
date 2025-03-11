@@ -111,7 +111,7 @@ export class ChunkManager {
             this.workerPool.addTask(
                 'generateChunk',
                 { chunkX, chunkY, chunkZ },
-                this.handleChunkGenerated.bind(this),
+                this.handleChunkGenerated.bind(this, chunkX, chunkY, chunkZ),
                 [], // No transferables for this task
                 true // Priority task for nearby chunks
             );
@@ -144,10 +144,8 @@ export class ChunkManager {
         }
     }
 
-
     // Handle chunk generation completion from worker
-    handleChunkGenerated(result) {
-        const { chunkX, chunkY, chunkZ, voxelData } = result;
+    handleChunkGenerated(chunkX, chunkY, chunkZ, result) {
         const key = this.getChunkKey(chunkX, chunkY, chunkZ);
 
         // Check if we still need this chunk (it might have been unloaded while generating)
@@ -158,7 +156,7 @@ export class ChunkManager {
 
         // Create chunk from voxel data
         const chunk = new Chunk();
-        chunk.fillFromArray(voxelData);
+        chunk.fillFromArray(result.voxelData);
 
         // Store chunk
         this.chunks.set(key, chunk);
@@ -397,15 +395,25 @@ export class ChunkManager {
                     });
 
                     // Queue meshing task for worker
+                    const chunkData = chunk.serialize();
+                    const transferables = [chunkData.buffer];
+
+                    // Add neighbor buffers to transferables
+                    for (const neighbor of neighbors) {
+                        if (neighbor.voxelData && neighbor.voxelData.buffer) {
+                            transferables.push(neighbor.voxelData.buffer);
+                        }
+                    }
+
                     this.workerPool.addTask(
                         'generateMesh',
                         {
-                            chunkData: chunk.serialize(),
+                            chunkData,
                             x, y, z,
                             neighbors
                         },
-                        (meshData) => this.handleMeshGenerated(x, y, z, meshData),
-                        [], // Transferables will be set by worker
+                        this.handleMeshGenerated.bind(this),
+                        transferables, // Use transferables for better performance
                         false // Meshing is not as high priority as chunk generation
                     );
 
@@ -436,8 +444,7 @@ export class ChunkManager {
 
                     // Create WebGL mesh
                     const worldOffset = [x * CHUNK_SIZE, y * CHUNK_SIZE, z * CHUNK_SIZE];
-                    const useTextures = mesh.uvs && mesh.uvs.length > 0;
-                    const glMesh = this.renderer.createMesh(mesh, worldOffset, useTextures);
+                    const glMesh = this.renderer.createMesh(mesh, worldOffset);
 
                     // Store buffer IDs for cleanup
                     if (glMesh.bufferIds) {
@@ -480,7 +487,8 @@ export class ChunkManager {
     }
 
     // Handle mesh generation completion from worker
-    handleMeshGenerated(x, y, z, meshData) {
+    handleMeshGenerated(result) {
+        const { x, y, z, vertexCount } = result;
         const key = this.getChunkKey(x, y, z);
 
         // Skip if chunk no longer exists or is no longer needed
@@ -490,7 +498,7 @@ export class ChunkManager {
         }
 
         // Skip if empty mesh
-        if (meshData.vertexCount === 0) {
+        if (vertexCount === 0) {
             this.dirtyChunks.delete(key);
             this.pendingOperations.delete(key);
 
@@ -511,23 +519,17 @@ export class ChunkManager {
             return;
         }
 
-        // Convert typed arrays back to mesh data
+        // Convert typed arrays to mesh data format
         const mesh = {
-            positions: Array.from(meshData.vertexBuffer),
-            normals: Array.from(meshData.normalBuffer),
-            colors: Array.from(meshData.colorBuffer),
-            indices: Array.from(meshData.indexBuffer)
+            positions: Array.from(result.vertexBuffer),
+            normals: Array.from(result.normalBuffer),
+            colors: Array.from(result.colorBuffer),
+            indices: Array.from(result.indexBuffer)
         };
-
-        // Add UVs if available
-        if (meshData.uvBuffer) {
-            mesh.uvs = Array.from(meshData.uvBuffer);
-        }
 
         // Create WebGL mesh
         const worldOffset = [x * CHUNK_SIZE, y * CHUNK_SIZE, z * CHUNK_SIZE];
-        const useTextures = mesh.uvs && mesh.uvs.length > 0;
-        const glMesh = this.renderer.createMesh(mesh, worldOffset, useTextures);
+        const glMesh = this.renderer.createMesh(mesh, worldOffset);
 
         // Store buffer IDs for cleanup
         if (glMesh.bufferIds) {
@@ -556,7 +558,7 @@ export class ChunkManager {
         this.dirtyChunks.delete(key);
         this.pendingOperations.delete(key);
 
-        debugLog(`Built mesh from worker for chunk ${key}: ${meshData.vertexCount} vertices`);
+        debugLog(`Built mesh from worker for chunk ${key}: ${vertexCount} vertices`);
     }
 
     // Get voxel at world coordinates
@@ -652,6 +654,14 @@ export class ChunkManager {
                 }
             }
 
+            // Prepare transferables for better performance
+            const transferables = [];
+            for (const chunk of chunks) {
+                if (chunk.voxelData && chunk.voxelData.buffer) {
+                    transferables.push(chunk.voxelData.buffer);
+                }
+            }
+
             // Send task to worker
             this.workerPool.addTask(
                 'createCrater',
@@ -663,7 +673,7 @@ export class ChunkManager {
                     chunks
                 },
                 this.handleCraterCreated.bind(this),
-                [], // No transferables for now
+                transferables, // Use transferables for better performance
                 true // Priority task
             );
         } else {
@@ -696,11 +706,24 @@ export class ChunkManager {
             if (this.chunks.has(key)) {
                 const chunk = this.chunks.get(key);
 
-                // Update with new data
+                // Update with new data - including air voxels
                 chunk.fillFromArray(voxelData);
 
                 // Mark as dirty for mesh rebuild
                 this.dirtyChunks.add(key);
+
+                // Mark neighboring chunks as dirty if this chunk is on a boundary
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dz = -1; dz <= 1; dz++) {
+                            if (dx === 0 && dy === 0 && dz === 0) continue;
+                            const neighborKey = this.getChunkKey(chunkX + dx, chunkY + dy, chunkZ + dz);
+                            if (this.chunks.has(neighborKey)) {
+                                this.dirtyChunks.add(neighborKey);
+                            }
+                        }
+                    }
+                }
 
                 // Update bounds
                 if (USE_TIGHT_BOUNDS) {

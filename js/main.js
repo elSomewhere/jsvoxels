@@ -9,7 +9,6 @@ import { Controls } from './controls.js';
 import { WorkerPool } from './worker-pool.js';
 import { SpatialIndex } from './spatial-index.js';
 import { BufferManager } from './buffer-manager.js';
-import { TextureAtlas } from './texture-atlas.js';
 import { debugLog } from './math-utils.js';
 window.DEBUG = DEBUG;
 
@@ -47,11 +46,8 @@ class VoxelEngine {
         // Create spatial index
         this.spatialIndex = new SpatialIndex();
 
-        // Create texture atlas - now returns a promise
-        this.textureAtlas = new TextureAtlas(this.renderer.gl);
-
         // Initialize voxel types
-        this.voxelTypes = new VoxelTypeManager(this.textureAtlas);
+        this.voxelTypes = new VoxelTypeManager();
 
         // Initialize worker pool if multithreading is enabled
         this.workerPool = null;
@@ -61,37 +57,9 @@ class VoxelEngine {
             try {
                 this.workerPool = new WorkerPool(WORKER_COUNT);
                 console.log(`Worker pool initialized with ${this.workerPool.workers.length} workers`);
-
-                // The worker initialization is now a promise
-                this.workerInitPromise = new Promise((resolve, reject) => {
-                    // Only send texture data once the texture atlas is ready
-                    this.textureAtlas.loadingPromise.then(() => {
-                        if (this.workerPool.workers.length === 0) {
-                            console.warn("No workers available for initialization");
-                            resolve();
-                            return;
-                        }
-
-                        this.workerPool.addTask(
-                            'initializeTextures',
-                            {
-                                textureData: this.voxelTypes.getSerializableTextureData()
-                            },
-                            (result) => {
-                                console.log("Texture data sent to workers:", result);
-                                resolve();
-                            },
-                            []
-                        );
-                    }).catch(err => {
-                        console.error("Failed to initialize workers with textures:", err);
-                        resolve(); // Still resolve to allow engine to continue
-                    });
-                });
             } catch (error) {
                 console.error("Failed to initialize worker pool:", error);
                 // Continue without workers
-                this.workerInitPromise = Promise.resolve(); // Make sure we still have a resolved promise
             }
         }
 
@@ -99,7 +67,7 @@ class VoxelEngine {
         this.worldGenerator = new WorldGenerator();
 
         // Create mesher
-        this.mesher = new Mesher(this.voxelTypes, this.textureAtlas);
+        this.mesher = new Mesher(this.voxelTypes);
 
         // Create chunk manager
         this.chunkManager = new ChunkManager(
@@ -121,15 +89,9 @@ class VoxelEngine {
         this.initEngine();
     }
 
-    // Initialize the engine with proper async handling
+    // Initialize the engine
     async initEngine() {
         try {
-            // Wait for both texture loading and worker initialization
-            await Promise.all([
-                this.textureAtlas.loadingPromise,
-                this.workerInitPromise
-            ]);
-
             console.log("Engine initialized successfully");
             this.engineReady = true;
 
@@ -481,9 +443,6 @@ class VoxelEngine {
         const up = [0, 1, 0];
         mat4.lookAt(viewMatrix, this.camera.position, target, up);
 
-        // Bind the texture atlas
-        this.textureAtlas.bind(0);
-
         // Render all chunks
         const drawnChunks = this.chunkManager.render(projectionMatrix, viewMatrix);
 
@@ -508,11 +467,6 @@ class VoxelEngine {
         // Dispose buffer manager
         if (this.bufferManager) {
             this.bufferManager.dispose();
-        }
-
-        // Dispose texture atlas
-        if (this.textureAtlas) {
-            this.textureAtlas.dispose();
         }
 
         // Dispose renderer
