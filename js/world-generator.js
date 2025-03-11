@@ -51,7 +51,7 @@ export class WorldGenerator {
                             voxelType = VoxelType.AIR;
                         }
                     } else if (wy < 8) {
-                        // Water
+                        // Water - now opaque
                         voxelType = VoxelType.WATER;
                     }
 

@@ -25,11 +25,15 @@ export class ChunkManager {
 
         // Pending operations tracking
         this.pendingOperations = new Map(); // Map of chunk keys to pending operations
+        this.meshesPendingUpdate = new Set(); // Set of chunk keys that have a queued mesh operation
 
         // Hysteresis for chunk loading/unloading to prevent flickering
         this.loadedChunkKeys = new Set(); // Set of currently loaded chunk keys
         this.loadMargin = 1.1;  // Keep chunks loaded within 1.1x render distance
         this.unloadMargin = 1.5; // Unload chunks beyond 1.5x render distance
+
+        // Add player position tracking
+        this.playerPosition = [0, 0, 0];
     }
 
     // Create chunk key from coordinates
@@ -60,6 +64,15 @@ export class ChunkManager {
             debugLog(`Marked chunk dirty: ${key}`);
         }
 
+        // Cancel any pending mesh operations for this chunk
+        if (this.pendingOperations.has(key)) {
+            const operation = this.pendingOperations.get(key);
+            if (operation.type === 'mesh') {
+                debugLog(`Cancelling pending mesh operation for chunk ${key}`);
+                operation.cancelled = true;
+            }
+        }
+
         // Also mark neighboring chunks as dirty if they could be affected
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
@@ -68,6 +81,15 @@ export class ChunkManager {
                     const neighborKey = this.getChunkKey(x + dx, y + dy, z + dz);
                     if (this.chunks.has(neighborKey)) {
                         this.dirtyChunks.add(neighborKey);
+
+                        // Also cancel any pending mesh operations for neighboring chunks
+                        if (this.pendingOperations.has(neighborKey)) {
+                            const operation = this.pendingOperations.get(neighborKey);
+                            if (operation.type === 'mesh') {
+                                debugLog(`Cancelling pending mesh operation for neighbor chunk ${neighborKey}`);
+                                operation.cancelled = true;
+                            }
+                        }
                     }
                 }
             }
@@ -178,8 +200,16 @@ export class ChunkManager {
         debugLog(`Chunk generated from worker: ${key}`);
     }
 
+    // Update player position for mesh rebuilding priority
+    updatePlayerPosition(x, y, z) {
+        this.playerPosition = [x, y, z];
+    }
+
     // Update chunks based on player position
     updateChunks(playerX, playerY, playerZ) {
+        // Update player position for mesh rebuilding priority
+        this.updatePlayerPosition(playerX, playerY, playerZ);
+
         // Convert player position to chunk coordinates
         const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
         const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
@@ -339,20 +369,39 @@ export class ChunkManager {
 
     // Build/rebuild meshes for dirty chunks
     buildChunkMeshes() {
-        // Limit rebuilds per frame
-        const rebuildLimit = 2;
+        // Increase rebuild limit to handle more chunks per frame
+        const rebuildLimit = 5; // Increased from 2
         let rebuilt = 0;
 
-        for (const key of this.dirtyChunks) {
+        // Sort dirty chunks by distance to player for better prioritization
+        const sortedDirtyChunks = Array.from(this.dirtyChunks).map(key => {
+            const [x, y, z] = key.split(',').map(Number);
+            // Calculate distance to player
+            const dx = x * CHUNK_SIZE - this.playerPosition[0];
+            const dy = y * CHUNK_SIZE - this.playerPosition[1];
+            const dz = z * CHUNK_SIZE - this.playerPosition[2];
+            const distSquared = dx * dx + dy * dy + dz * dz;
+            return { key, distSquared };
+        }).sort((a, b) => a.distSquared - b.distSquared);
+
+        for (const { key } of sortedDirtyChunks) {
             if (rebuilt >= rebuildLimit) break;
 
             const [x, y, z] = key.split(',').map(Number);
             const chunk = this.getChunk(x, y, z);
 
+            // Skip chunks that already have a pending mesh update
+            if (this.meshesPendingUpdate.has(key)) {
+                continue;
+            }
+
             if (chunk) {
-                // Skip if there's already a pending mesh operation
-                if (this.pendingOperations.has(key) && this.pendingOperations.get(key).type === 'mesh') {
-                    continue;
+                // Skip if there's already a pending mesh operation (that hasn't been cancelled)
+                if (this.pendingOperations.has(key)) {
+                    const op = this.pendingOperations.get(key);
+                    if (op.type === 'mesh' && !op.cancelled) {
+                        continue;
+                    }
                 }
 
                 // Skip if chunk is no longer needed (outside render distance)
@@ -376,35 +425,31 @@ export class ChunkManager {
 
                                 if (this.chunks.has(nkey)) {
                                     const neighbor = this.chunks.get(nkey);
-                                    // Serialize neighbor chunk data
+                                    // Clone the data rather than using transferables
+                                    const voxelData = neighbor.serialize();
                                     neighbors.push({
                                         x: nx,
                                         y: ny,
                                         z: nz,
-                                        voxelData: neighbor.serialize()
+                                        voxelData: voxelData
                                     });
                                 }
                             }
                         }
                     }
 
-                    // Mark as pending
+                    // Mark as pending and add to meshes pending set
                     this.pendingOperations.set(key, {
                         type: 'mesh',
-                        x, y, z
+                        x, y, z,
+                        cancelled: false
                     });
+                    this.meshesPendingUpdate.add(key);
 
-                    // Queue meshing task for worker
+                    // Queue meshing task for worker with cloned data
                     const chunkData = chunk.serialize();
-                    const transferables = [chunkData.buffer];
 
-                    // Add neighbor buffers to transferables
-                    for (const neighbor of neighbors) {
-                        if (neighbor.voxelData && neighbor.voxelData.buffer) {
-                            transferables.push(neighbor.voxelData.buffer);
-                        }
-                    }
-
+                    // Don't use transferables for mesh generation to avoid buffer detachment
                     this.workerPool.addTask(
                         'generateMesh',
                         {
@@ -413,8 +458,8 @@ export class ChunkManager {
                             neighbors
                         },
                         this.handleMeshGenerated.bind(this),
-                        transferables, // Use transferables for better performance
-                        false // Meshing is not as high priority as chunk generation
+                        [], // No transferables to avoid buffer detachment
+                        true // Make meshing high priority for better visual consistency
                     );
 
                     rebuilt++;
@@ -491,31 +536,73 @@ export class ChunkManager {
         const { x, y, z, vertexCount } = result;
         const key = this.getChunkKey(x, y, z);
 
+        // Remove from pending mesh updates
+        this.meshesPendingUpdate.delete(key);
+
         // Skip if chunk no longer exists or is no longer needed
         if (!this.chunks.has(key) || !this.loadedChunkKeys.has(key)) {
             this.pendingOperations.delete(key);
             return;
         }
 
-        // Skip if empty mesh
+        // Check if this operation was cancelled
+        if (this.pendingOperations.has(key)) {
+            const operation = this.pendingOperations.get(key);
+            if (operation.cancelled) {
+                debugLog(`Ignoring cancelled mesh operation for chunk ${key}`);
+                this.pendingOperations.delete(key);
+                // Keep the chunk marked as dirty so it will be rebuilt
+                return;
+            }
+        }
+
+        // Special handling for empty meshes - don't remove them immediately
+        // This prevents chunks from flickering
         if (vertexCount === 0) {
-            this.dirtyChunks.delete(key);
-            this.pendingOperations.delete(key);
-
-            // Delete existing mesh if it exists
-            if (this.meshes.has(key)) {
-                this.renderer.deleteMesh(this.meshes.get(key));
-                this.meshes.delete(key);
-
-                // Clean up buffer IDs
-                if (this.meshBuffers.has(key)) {
-                    for (const bufferId of this.meshBuffers.get(key)) {
-                        this.bufferManager.releaseBuffer(bufferId);
+            // Only remove the mesh if the chunk is actually empty
+            // This avoids removing meshes that should be regenerated
+            const chunk = this.getChunk(x, y, z);
+            let isEmpty = true;
+            if (chunk) {
+                // Quick check if chunk is truly empty
+                for (let y = 0; y < CHUNK_SIZE; y++) {
+                    for (let z = 0; z < CHUNK_SIZE; z++) {
+                        for (let x = 0; x < CHUNK_SIZE; x++) {
+                            if (chunk.getVoxel(x, y, z) !== 0) {
+                                isEmpty = false;
+                                break;
+                            }
+                        }
+                        if (!isEmpty) break;
                     }
-                    this.meshBuffers.delete(key);
+                    if (!isEmpty) break;
                 }
             }
 
+            // Only remove the mesh if the chunk is truly empty
+            if (isEmpty) {
+                this.dirtyChunks.delete(key);
+                this.pendingOperations.delete(key);
+
+                // Delete existing mesh if it exists
+                if (this.meshes.has(key)) {
+                    this.renderer.deleteMesh(this.meshes.get(key));
+                    this.meshes.delete(key);
+
+                    // Clean up buffer IDs
+                    if (this.meshBuffers.has(key)) {
+                        for (const bufferId of this.meshBuffers.get(key)) {
+                            this.bufferManager.releaseBuffer(bufferId);
+                        }
+                        this.meshBuffers.delete(key);
+                    }
+                }
+            } else {
+                // The chunk isn't actually empty, so we need to rebuild
+                // This could happen if the chunk was modified after meshing started
+                this.dirtyChunks.add(key);
+                this.pendingOperations.delete(key);
+            }
             return;
         }
 
@@ -643,26 +730,37 @@ export class ChunkManager {
                         const key = this.getChunkKey(cx, cy, cz);
                         if (this.chunks.has(key)) {
                             const chunk = this.chunks.get(key);
+                            // IMPORTANT: Clone the data rather than transferring the original buffer
+                            // This prevents the original buffer from being detached
+                            const voxelData = chunk.serialize();
                             chunks.push({
                                 chunkX: cx,
                                 chunkY: cy,
                                 chunkZ: cz,
-                                voxelData: chunk.serialize()
+                                voxelData: voxelData
                             });
                         }
                     }
                 }
             }
 
-            // Prepare transferables for better performance
-            const transferables = [];
-            for (const chunk of chunks) {
-                if (chunk.voxelData && chunk.voxelData.buffer) {
-                    transferables.push(chunk.voxelData.buffer);
+            // For each affected chunk, cancel any pending mesh operations
+            for (let cx = centerChunkX - chunkRadius; cx <= centerChunkX + chunkRadius; cx++) {
+                for (let cy = centerChunkY - chunkRadius; cy <= centerChunkY + chunkRadius; cy++) {
+                    for (let cz = centerChunkZ - chunkRadius; cz <= centerChunkZ + chunkRadius; cz++) {
+                        const key = this.getChunkKey(cx, cy, cz);
+                        if (this.pendingOperations.has(key)) {
+                            const operation = this.pendingOperations.get(key);
+                            if (operation.type === 'mesh') {
+                                debugLog(`Cancelling pending mesh operation for chunk ${key} due to crater`);
+                                operation.cancelled = true;
+                            }
+                        }
+                    }
                 }
             }
 
-            // Send task to worker
+            // Send task to worker, but DON'T transfer the original buffers
             this.workerPool.addTask(
                 'createCrater',
                 {
@@ -673,7 +771,7 @@ export class ChunkManager {
                     chunks
                 },
                 this.handleCraterCreated.bind(this),
-                transferables, // Use transferables for better performance
+                [], // No transferables to avoid buffer detachment
                 true // Priority task
             );
         } else {
@@ -697,6 +795,9 @@ export class ChunkManager {
     handleCraterCreated(result) {
         const { modifiedChunks } = result;
 
+        // Track all affected chunks for mesh rebuilding
+        const chunksToRebuild = new Set();
+
         // Update each modified chunk
         for (const chunkData of modifiedChunks) {
             const { chunkX, chunkY, chunkZ, voxelData } = chunkData;
@@ -709,8 +810,8 @@ export class ChunkManager {
                 // Update with new data - including air voxels
                 chunk.fillFromArray(voxelData);
 
-                // Mark as dirty for mesh rebuild
-                this.dirtyChunks.add(key);
+                // Add to rebuild set
+                chunksToRebuild.add(key);
 
                 // Mark neighboring chunks as dirty if this chunk is on a boundary
                 for (let dx = -1; dx <= 1; dx++) {
@@ -719,7 +820,7 @@ export class ChunkManager {
                             if (dx === 0 && dy === 0 && dz === 0) continue;
                             const neighborKey = this.getChunkKey(chunkX + dx, chunkY + dy, chunkZ + dz);
                             if (this.chunks.has(neighborKey)) {
-                                this.dirtyChunks.add(neighborKey);
+                                chunksToRebuild.add(neighborKey);
                             }
                         }
                     }
@@ -732,6 +833,28 @@ export class ChunkManager {
                 }
             }
         }
+
+        // Add all chunks to the dirty set after processing all modifications
+        // This prevents race conditions from multiple updates
+        for (const key of chunksToRebuild) {
+            this.dirtyChunks.add(key);
+
+            // IMPORTANT: Cancel any pending mesh operations for this chunk
+            if (this.pendingOperations.has(key)) {
+                const operation = this.pendingOperations.get(key);
+                if (operation.type === 'mesh') {
+                    debugLog(`Cancelling pending mesh operation for chunk ${key}`);
+                    // We can't actually cancel tasks, but we can ignore their results
+                    // when they complete by adding a flag
+                    operation.cancelled = true;
+
+                    // Remove from meshes pending update so a new mesh can be generated
+                    this.meshesPendingUpdate.delete(key);
+                }
+            }
+        }
+
+        debugLog(`Marked ${chunksToRebuild.size} chunks for rebuild after crater`);
     }
 
     // Perform raycast against voxels
@@ -786,6 +909,17 @@ export class ChunkManager {
 
         debugLog(`Raycast missed (exceeded maxDistance)`);
         return null; // No hit
+    }
+
+    // Get chunk debug info for visualization
+    getChunkDebugInfo() {
+        return {
+            totalChunks: this.totalChunks,
+            loadedChunks: this.loadedChunkKeys.size,
+            dirtyChunks: this.dirtyChunks.size,
+            pendingOperations: this.pendingOperations.size,
+            meshes: this.meshes.size
+        };
     }
 
     // Render all chunks with frustum culling

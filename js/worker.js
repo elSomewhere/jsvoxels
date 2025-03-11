@@ -131,7 +131,7 @@ function generateChunk(data) {
                         voxelType = VoxelType.AIR;
                     }
                 } else if (wy < 8) {
-                    // Water
+                    // Water - keep as opaque water
                     voxelType = VoxelType.WATER;
                 }
 
@@ -172,7 +172,7 @@ function generateMesh(data) {
 
     // Function to get neighboring chunks
     function getNeighborChunk(nx, ny, nz) {
-        const neighborKey = `${nx},${ny},${nz}`;
+        // Check if this neighbor exists in our provided neighbors
         for (const neighbor of neighbors) {
             if (neighbor.x === nx && neighbor.y === ny && neighbor.z === nz) {
                 return {
@@ -215,16 +215,28 @@ function createCrater(data) {
     // Process each affected chunk
     const modifiedChunks = {};
 
-    // Iterate through the spherical crater volume
-    for (let dx = -radius; dx <= radius; dx++) {
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dz = -radius; dz <= radius; dz++) {
-                const distSquared = dx * dx + dy * dy + dz * dz;
-                if (distSquared > radius * radius) continue;
+    // We need to track which chunks were actually modified
+    const modifiedChunkKeys = new Set();
 
-                const x = Math.floor(centerX + dx);
-                const y = Math.floor(centerY + dy);
-                const z = Math.floor(centerZ + dz);
+    // Calculate extended bounding box for the crater to ensure we check all affected voxels
+    const minX = Math.floor(centerX - radius - 1);
+    const minY = Math.floor(centerY - radius - 1);
+    const minZ = Math.floor(centerZ - radius - 1);
+    const maxX = Math.ceil(centerX + radius + 1);
+    const maxY = Math.ceil(centerY + radius + 1);
+    const maxZ = Math.ceil(centerZ + radius + 1);
+
+    // Iterate through the bounding box of the crater
+    for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+            for (let z = minZ; z <= maxZ; z++) {
+                // Check if this point is within the crater radius
+                const dx = x - centerX;
+                const dy = y - centerY;
+                const dz = z - centerZ;
+                const distSquared = dx * dx + dy * dy + dz * dz;
+
+                if (distSquared > radius * radius) continue;
 
                 // Calculate chunk coordinates
                 const chunkX = Math.floor(x / CHUNK_SIZE);
@@ -240,6 +252,7 @@ function createCrater(data) {
                     );
 
                     if (chunkData) {
+                        // Important: Create a copy of the voxel data to avoid modifying the original
                         modifiedChunks[chunkKey] = {
                             chunkX,
                             chunkY,
@@ -247,29 +260,81 @@ function createCrater(data) {
                             voxelData: new Uint8Array(chunkData.voxelData)
                         };
                     } else {
-                        // Create new chunk data if not found
-                        modifiedChunks[chunkKey] = {
-                            chunkX,
-                            chunkY,
-                            chunkZ,
-                            voxelData: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE)
-                        };
+                        // Skip if we don't have this chunk's data
+                        // It's better to skip than to create a new empty chunk
+                        continue;
                     }
                 }
 
-                // Set voxel to air (0)
+                // Calculate local coordinates
                 const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
                 const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
                 const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 
+                // Get current voxel type
                 const index = (localY * CHUNK_SIZE * CHUNK_SIZE) + (localZ * CHUNK_SIZE) + localX;
-                modifiedChunks[chunkKey].voxelData[index] = 0;
+                const chunk = modifiedChunks[chunkKey];
+
+                // Only set to air if it's not already air
+                if (chunk.voxelData[index] !== 0) {
+                    chunk.voxelData[index] = 0;
+                    modifiedChunkKeys.add(chunkKey);
+
+                    // If this voxel is on a chunk boundary, we need to mark neighbor chunks
+                    // even if they don't have any voxels changed
+                    if (localX === 0 || localX === CHUNK_SIZE - 1 ||
+                        localY === 0 || localY === CHUNK_SIZE - 1 ||
+                        localZ === 0 || localZ === CHUNK_SIZE - 1) {
+
+                        // Determine which neighbor chunk this affects
+                        const neighborOffsets = [];
+
+                        if (localX === 0) neighborOffsets.push([-1, 0, 0]);
+                        if (localX === CHUNK_SIZE - 1) neighborOffsets.push([1, 0, 0]);
+                        if (localY === 0) neighborOffsets.push([0, -1, 0]);
+                        if (localY === CHUNK_SIZE - 1) neighborOffsets.push([0, 1, 0]);
+                        if (localZ === 0) neighborOffsets.push([0, 0, -1]);
+                        if (localZ === CHUNK_SIZE - 1) neighborOffsets.push([0, 0, 1]);
+
+                        // Add all affected neighbor chunks to the modified set
+                        for (const [dx, dy, dz] of neighborOffsets) {
+                            const neighborKey = `${chunkX + dx},${chunkY + dy},${chunkZ + dz}`;
+                            modifiedChunkKeys.add(neighborKey);
+
+                            // Ensure the neighbor chunk is included in the result even if no voxels change
+                            if (!modifiedChunks[neighborKey]) {
+                                const neighborData = chunks.find(c =>
+                                    c.chunkX === chunkX + dx &&
+                                    c.chunkY === chunkY + dy &&
+                                    c.chunkZ === chunkZ + dz
+                                );
+
+                                if (neighborData) {
+                                    modifiedChunks[neighborKey] = {
+                                        chunkX: chunkX + dx,
+                                        chunkY: chunkY + dy,
+                                        chunkZ: chunkZ + dz,
+                                        voxelData: new Uint8Array(neighborData.voxelData)
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
+    // Only return chunks that were actually modified or need to be rebuilt
+    const result = [];
+    for (const key of modifiedChunkKeys) {
+        if (modifiedChunks[key]) {
+            result.push(modifiedChunks[key]);
+        }
+    }
+
     return {
-        modifiedChunks: Object.values(modifiedChunks)
+        modifiedChunks: result
     };
 }
 

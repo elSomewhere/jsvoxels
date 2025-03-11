@@ -34,6 +34,10 @@ export class WorkerPool {
 
         // Log actual number of workers created
         console.log(`WorkerPool initialized with ${this.workers.length} workers`);
+
+        // Add timeout checking for tasks
+        this.taskTimeoutMs = 5000; // 5 seconds timeout
+        this.checkTimeoutsInterval = setInterval(() => this.checkTaskTimeouts(), 1000);
     }
 
     // Update player position for task prioritization
@@ -57,12 +61,27 @@ export class WorkerPool {
         // Store callback
         this.callbacks.set(taskId, callback);
 
+        // Deep clone data to avoid buffer detachment issues when we don't want to use transferables
+        // This makes a copy instead of transferring the original buffer
+        let dataToSend = data;
+        let transferablesToUse = [];
+
+        if (transferables && transferables.length > 0) {
+            // If transferables are provided, use them
+            transferablesToUse = transferables;
+        } else {
+            // Otherwise, clone the data to avoid detaching buffers
+            // Note: We only need to clone ArrayBuffers, the rest can be referenced
+            dataToSend = this.cloneDataWithoutBuffers(data);
+        }
+
         const task = {
             taskId,
             type,
-            data,
-            transferables,
-            priority
+            data: dataToSend,
+            transferables: transferablesToUse,
+            priority,
+            timestamp: performance.now() // Add timestamp for timeout detection
         };
 
         // Add priority for chunk tasks
@@ -73,6 +92,12 @@ export class WorkerPool {
 
             // Lower number = higher priority
             task.distancePriority = this.calculatePriority(chunkX, chunkY, chunkZ);
+        }
+
+        // Higher priority for crater tasks and mesh regeneration after destruction
+        if (type === 'createCrater' ||
+            (type === 'generateMesh' && priority)) {
+            task.distancePriority = -1; // Highest priority
         }
 
         // Add to appropriate queue
@@ -93,6 +118,37 @@ export class WorkerPool {
 
         // Process task immediately if workers are available
         this.processNextTask();
+
+        return taskId;
+    }
+
+    // Helper method to clone data without detaching ArrayBuffers
+    cloneDataWithoutBuffers(data) {
+        if (!data) return data;
+
+        // For primitive types, return as is
+        if (typeof data !== 'object' || data === null) {
+            return data;
+        }
+
+        // Handle arrays
+        if (Array.isArray(data)) {
+            return data.map(item => this.cloneDataWithoutBuffers(item));
+        }
+
+        // Handle typed arrays by making a copy
+        if (ArrayBuffer.isView(data)) {
+            return new data.constructor(data);
+        }
+
+        // For regular objects, clone each property
+        const result = {};
+        for (const key in data) {
+            if (data.hasOwnProperty(key)) {
+                result[key] = this.cloneDataWithoutBuffers(data[key]);
+            }
+        }
+        return result;
     }
 
     // Process the next task in the queue
@@ -105,6 +161,10 @@ export class WorkerPool {
 
         const worker = this.idleWorkers.pop();
 
+        // Track task for timeout detection
+        worker.currentTaskId = task.taskId;
+        worker.currentTaskStarted = performance.now();
+
         // Increment active task count
         this.activeTaskCount++;
 
@@ -116,32 +176,79 @@ export class WorkerPool {
         }, task.transferables);
     }
 
+    // Add a method to check for task timeouts
+    checkTaskTimeouts() {
+        const now = performance.now();
+        const timeoutThreshold = now - this.taskTimeoutMs;
+
+        // Check all active tasks
+        let timeoutDetected = false;
+
+        // For each worker, check if it's been processing a task for too long
+        this.workers.forEach((worker, index) => {
+            if (!this.idleWorkers.includes(worker) && worker.currentTaskStarted) {
+                if (worker.currentTaskStarted < timeoutThreshold) {
+                    console.warn(`Worker ${index} appears stuck on task ${worker.currentTaskId}, restarting worker`);
+
+                    // Create a new worker to replace the stuck one
+                    try {
+                        const newWorker = new Worker('js/worker.js', { type: 'module' });
+                        this.setupWorker(newWorker);
+
+                        // Remove the old worker from the pool
+                        this.workers = this.workers.filter(w => w !== worker);
+
+                        // Terminate the stuck worker
+                        worker.terminate();
+
+                        // Requeue the task if we know what it was
+                        if (worker.currentTaskId !== undefined &&
+                            this.callbacks.has(worker.currentTaskId)) {
+                            console.log(`Requeuing task ${worker.currentTaskId}`);
+                            const callback = this.callbacks.get(worker.currentTaskId);
+
+                            // Requeue with high priority
+                            // Note: We don't have the original data, so we can only send an error
+                            this.callbacks.delete(worker.currentTaskId);
+                            if (callback) {
+                                callback({ error: 'Task timed out and was restarted' });
+                            }
+                        }
+
+                        timeoutDetected = true;
+                    } catch (e) {
+                        console.error("Failed to create replacement worker:", e);
+                    }
+                }
+            }
+        });
+
+        // If we detected a timeout, try processing the next task
+        if (timeoutDetected) {
+            this.processNextTask();
+        }
+    }
+
     // Get total tasks (queued + active)
     getTotalTaskCount() {
         return this.taskQueue.length + this.priorityTaskQueue.length + this.activeTaskCount;
     }
 
-    // Terminate all workers (cleanup)
-    terminate() {
-        for (const worker of this.workers) {
-            worker.terminate();
-        }
-        this.workers = [];
-        this.idleWorkers = [];
-        this.taskQueue = [];
-        this.priorityTaskQueue = [];
-        this.callbacks.clear();
-    }
-
     // Helper method to set up a worker
     setupWorker(worker) {
+        worker.currentTaskId = undefined;
+        worker.currentTaskStarted = undefined;
+
         worker.onmessage = (e) => {
-            // Handle multiple possible message formats
-            let taskId, result;
+            // Reset task tracking
+            const taskId = worker.currentTaskId;
+            worker.currentTaskId = undefined;
+            worker.currentTaskStarted = undefined;
+
+            // Handle message (unchanged)
+            let result;
 
             if (e.data.taskId !== undefined) {
-                taskId = e.data.taskId;
-                // Get result from the appropriate field
                 result = e.data.result;
             } else {
                 console.error("Received message without taskId:", e.data);
@@ -184,5 +291,23 @@ export class WorkerPool {
 
         this.idleWorkers.push(worker);
         this.workers.push(worker);
+    }
+
+    // Terminate all workers (cleanup)
+    terminate() {
+        // Clear the timeout checking interval
+        if (this.checkTimeoutsInterval) {
+            clearInterval(this.checkTimeoutsInterval);
+            this.checkTimeoutsInterval = null;
+        }
+
+        for (const worker of this.workers) {
+            worker.terminate();
+        }
+        this.workers = [];
+        this.idleWorkers = [];
+        this.taskQueue = [];
+        this.priorityTaskQueue = [];
+        this.callbacks.clear();
     }
 }

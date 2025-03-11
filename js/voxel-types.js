@@ -17,7 +17,7 @@ export class VoxelTypeManager {
         // Air
         this.registerType(VoxelType.AIR, {
             name: "Air",
-            transparent: true,
+            transparent: true, // Only air is transparent
             solid: false,
             getColor: () => [0, 0, 0, 0]
         });
@@ -58,12 +58,12 @@ export class VoxelTypeManager {
             getColor: () => [0.5, 0.3, 0.1, 1.0]
         });
 
-        // Water
+        // Water - now fully opaque
         this.registerType(VoxelType.WATER, {
             name: "Water",
-            transparent: true,
-            solid: true, // Semi-solid for physics
-            getColor: () => [0.0, 0.3, 0.8, 0.7]
+            transparent: false, // Changed from true to false
+            solid: true,
+            getColor: () => [0.0, 0.3, 0.8, 1.0] // Changed alpha from 0.7 to 1.0
         });
     }
 

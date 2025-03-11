@@ -77,7 +77,7 @@ export class Renderer {
                 float fogFactor = smoothstep(uFogNear, uFogFar, dist);
                 vec3 finalColor = mix(litColor.rgb, uFogColor, fogFactor);
                 
-                gl_FragColor = vec4(finalColor, litColor.a);
+                gl_FragColor = vec4(finalColor, 1.0); // Always fully opaque now
             }
         `;
 
@@ -208,23 +208,13 @@ export class Renderer {
             maxZ: worldOffset[2] + CHUNK_SIZE
         };
 
-        // Check for water to mark as transparent
-        let hasWater = false;
-        for (let i = 0; i < colors.length; i += 4) {
-            if (colors[i + 3] < 0.95) { // Check alpha value
-                hasWater = true;
-                break;
-            }
-        }
-
-        // Return mesh object
+        // Return mesh object (no longer tracking transparency)
         return {
             buffers,
             bufferIds,  // Store buffer IDs for cleanup
             vertexCount: indices.length,
             worldOffset,
-            bounds,
-            transparent: hasWater
+            bounds
         };
     }
 
@@ -319,11 +309,10 @@ export class Renderer {
         return isInFrustum;
     }
 
-    // Render chunks with frustum culling
+    // Render chunks with frustum culling - simplified to remove transparency handling
     renderChunks(meshes, projectionMatrix, viewMatrix) {
-        // Set up alpha blending for transparent blocks
-        this.gl.enable(this.gl.BLEND);
-        this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+        // No more alpha blending needed
+        this.gl.disable(this.gl.BLEND);
 
         // Create projection-view matrix for frustum culling
         const projViewMatrix = mat4.create();
@@ -335,10 +324,7 @@ export class Renderer {
         // Draw only visible meshes
         let drawnChunks = 0;
         let skippedChunks = 0;
-
-        // Split meshes into opaque and transparent for proper rendering order
-        const opaqueMeshes = [];
-        const transparentMeshes = [];
+        let visibleMeshes = [];
 
         // Safety counter to detect frustum culling issues
         let visibleCount = 0;
@@ -354,70 +340,20 @@ export class Renderer {
             }
 
             visibleCount++;
-
-            // Sort by transparency
-            if (mesh.transparent) {
-                transparentMeshes.push(mesh);
-            } else {
-                opaqueMeshes.push(mesh);
-            }
+            visibleMeshes.push(mesh);
         }
 
         // Safety check: if no chunks are visible but we have chunks, 
         // the frustum culling might be broken - fallback to rendering all
         if (visibleCount === 0 && meshes.length > 0) {
             console.warn('Frustum culling may have failed - no visible chunks. Rendering all chunks.');
-            for (const mesh of meshes) {
-                if (!mesh || mesh.vertexCount === 0) continue;
-
-                if (mesh.transparent) {
-                    transparentMeshes.push(mesh);
-                } else {
-                    opaqueMeshes.push(mesh);
-                }
-            }
+            visibleMeshes = meshes.filter(mesh => mesh && mesh.vertexCount > 0);
         }
 
-        // Draw opaque meshes first
-        this.renderMeshGroup(opaqueMeshes, projectionMatrix, viewMatrix);
-        drawnChunks += opaqueMeshes.length;
+        // Render all visible meshes in one batch
+        this.renderMeshGroup(visibleMeshes, projectionMatrix, viewMatrix);
+        drawnChunks = visibleMeshes.length;
 
-        // Then draw transparent meshes back-to-front
-        if (transparentMeshes.length > 0) {
-            // Sort transparent meshes by distance from camera (back to front)
-            const cameraPosition = [
-                -viewMatrix[12],
-                -viewMatrix[13],
-                -viewMatrix[14]
-            ];
-
-            transparentMeshes.sort((a, b) => {
-                const aCenter = [
-                    a.worldOffset[0] + CHUNK_SIZE / 2,
-                    a.worldOffset[1] + CHUNK_SIZE / 2,
-                    a.worldOffset[2] + CHUNK_SIZE / 2
-                ];
-                const bCenter = [
-                    b.worldOffset[0] + CHUNK_SIZE / 2,
-                    b.worldOffset[1] + CHUNK_SIZE / 2,
-                    b.worldOffset[2] + CHUNK_SIZE / 2
-                ];
-
-                const aDistSq = Math.pow(aCenter[0] - cameraPosition[0], 2) +
-                    Math.pow(aCenter[1] - cameraPosition[1], 2) +
-                    Math.pow(aCenter[2] - cameraPosition[2], 2);
-                const bDistSq = Math.pow(bCenter[0] - cameraPosition[0], 2) +
-                    Math.pow(bCenter[1] - cameraPosition[1], 2) +
-                    Math.pow(bCenter[2] - cameraPosition[2], 2);
-
-                return bDistSq - aDistSq; // Back-to-front
-            });
-
-            this.renderMeshGroup(transparentMeshes, projectionMatrix, viewMatrix);
-            drawnChunks += transparentMeshes.length;
-        }
-
-        this.gl.disable(this.gl.BLEND);
         return drawnChunks;
     }
 

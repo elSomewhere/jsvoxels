@@ -47,11 +47,11 @@ export class MeshGenerator {
             for (let wValue = 0; wValue < CHUNK_SIZE; wValue++) {
                 // Two masks for each direction (positive and negative)
                 const maskPos = Array(CHUNK_SIZE).fill().map(() =>
-                    Array(CHUNK_SIZE).fill({ voxelType: 0, transparent: true, visible: false })
+                    Array(CHUNK_SIZE).fill({ voxelType: 0, visible: false })
                 );
 
                 const maskNeg = Array(CHUNK_SIZE).fill().map(() =>
-                    Array(CHUNK_SIZE).fill({ voxelType: 0, transparent: true, visible: false })
+                    Array(CHUNK_SIZE).fill({ voxelType: 0, visible: false })
                 );
 
                 // Fill both masks for this slice
@@ -64,7 +64,6 @@ export class MeshGenerator {
 
                         // Get current voxel
                         const voxel = this.getVoxel(chunk, x1, y1, z1, chunkX, chunkY, chunkZ, getNeighborChunk);
-                        const isTransparent1 = this.isVoxelTransparent(voxel);
 
                         // Get adjacent voxel in positive direction
                         let x2 = x1 + wDir[0];
@@ -72,23 +71,20 @@ export class MeshGenerator {
                         let z2 = z1 + wDir[2];
 
                         const voxelPos = this.getVoxel(chunk, x2, y2, z2, chunkX, chunkY, chunkZ, getNeighborChunk);
-                        const isTransparent2 = this.isVoxelTransparent(voxelPos);
 
-                        // Determine if faces should be created
-                        // For positive direction: current solid, next transparent
-                        if (voxel !== 0 && (voxelPos === 0 || (isTransparent2 && !isTransparent1))) {
+                        // Simplified face creation logic - only create faces between solid and air
+                        // For positive direction: current solid, next air
+                        if (voxel !== 0 && voxelPos === 0) {
                             maskPos[vValue][uValue] = {
                                 voxelType: voxel,
-                                transparent: isTransparent1,
                                 visible: true
                             };
                         }
 
-                        // For negative direction: current transparent, next solid
-                        if (voxelPos !== 0 && (voxel === 0 || (!isTransparent2 && isTransparent1))) {
+                        // For negative direction: current air, next solid
+                        if (voxel === 0 && voxelPos !== 0) {
                             maskNeg[vValue][uValue] = {
                                 voxelType: voxelPos,
-                                transparent: isTransparent2,
                                 visible: true
                             };
                         }
@@ -167,13 +163,9 @@ export class MeshGenerator {
         return chunk.getVoxel(x, y, z);
     }
 
-    // Check if a voxel type is transparent
+    // Check if a voxel type is transparent - simplified to just air
     isVoxelTransparent(voxelType) {
-        if (this.voxelTypes) {
-            return this.voxelTypes.isTransparent(voxelType);
-        }
-        // Default implementation for workers that might not have voxelTypes
-        return voxelType === 0 || voxelType === 5; // 5 is water
+        return voxelType === 0; // Only air is transparent
     }
 
     // Get color for a voxel type and face
@@ -194,8 +186,8 @@ export class MeshGenerator {
                 return [0.5, 0.5, 0.5, 1.0];
             case 4: // DIRT
                 return [0.5, 0.3, 0.1, 1.0];
-            case 5: // WATER
-                return [0.0, 0.3, 0.8, 0.7];
+            case 5: // WATER - Now fully opaque
+                return [0.0, 0.3, 0.8, 1.0];
             default:
                 return [1.0, 0.0, 1.0, 1.0]; // Magenta for unknown
         }
@@ -218,15 +210,13 @@ export class MeshGenerator {
 
                 // Get voxel type at this position
                 const voxelType = mask[vStart][uStart].voxelType;
-                const isTransparentVoxel = mask[vStart][uStart].transparent;
 
                 // Find maximum width (u direction)
                 let uEnd = uStart;
                 while (uEnd + 1 < size &&
                     !visited[vStart][uEnd + 1] &&
                     mask[vStart][uEnd + 1].visible &&
-                    mask[vStart][uEnd + 1].voxelType === voxelType &&
-                    mask[vStart][uEnd + 1].transparent === isTransparentVoxel) {
+                    mask[vStart][uEnd + 1].voxelType === voxelType) {
                     uEnd++;
                 }
 
@@ -239,8 +229,7 @@ export class MeshGenerator {
                     for (let u = uStart; u <= uEnd; u++) {
                         if (visited[vEnd + 1][u] ||
                             !mask[vEnd + 1][u].visible ||
-                            mask[vEnd + 1][u].voxelType !== voxelType ||
-                            mask[vEnd + 1][u].transparent !== isTransparentVoxel) {
+                            mask[vEnd + 1][u].voxelType !== voxelType) {
                             canExpandV = false;
                             break;
                         }
