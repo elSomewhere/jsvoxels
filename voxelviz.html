@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procedural 3D World</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background-color: #000;
+        }
+
+        #container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            z-index: 100;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+
+        button {
+            background: #2a2a2a;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #444;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container"></div>
+    <div id="info">
+        <h2>Procedural 3D World</h2>
+        <p>Use mouse to rotate view, scroll to zoom.</p>
+        <p>Use WASD to move the camera target.</p>
+        <p>Elements: <span id="elementCount">0</span></p>
+        <p>FPS: <span id="fps">0</span></p>
+    </div>
+    <div id="controls">
+        <button id="addStructures">Add More Structures</button>
+        <button id="toggleAnimation">Toggle Animation</button>
+        <button id="resetView">Reset View</button>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // Global variables
+        let scene, camera, renderer, controls;
+        let structures = [];
+        let animationEnabled = true;
+        let frameCount = 0;
+        let lastFpsUpdate = 0;
+        let moveSpeed = 0.5;
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let cameraTarget = new THREE.Vector3(0, 0, 0);
+
+        // Initialize scene
+        function init() {
+            console.log("Initializing scene...");
+
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000033);
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(20, 15, 20);
+            camera.lookAt(0, 0, 0);
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Create controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.copy(cameraTarget);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Add light
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Add a ground plane
+            const groundGeometry = new THREE.PlaneGeometry(100, 100);
+            const groundMaterial = new THREE.MeshPhongMaterial({
+                color: 0x222233,
+                side: THREE.DoubleSide,
+                shininess: 10
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = Math.PI / 2;
+            ground.position.y = -1;
+            scene.add(ground);
+
+            // Add a grid for reference
+            const gridHelper = new THREE.GridHelper(100, 100, 0x666666, 0x444444);
+            scene.add(gridHelper);
+
+            // Add axes
+            const axesHelper = new THREE.AxesHelper(5);
+            scene.add(axesHelper);
+
+            // Window resize event
+            window.addEventListener('resize', onWindowResize);
+
+            // Keyboard controls
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+
+            // Button events
+            document.getElementById('addStructures').addEventListener('click', addRandomStructures);
+            document.getElementById('toggleAnimation').addEventListener('click', toggleAnimation);
+            document.getElementById('resetView').addEventListener('click', resetView);
+
+            // Create initial structures
+            createInitialStructures();
+
+            // Start animation loop
+            animate();
+
+            console.log("Scene initialized successfully");
+        }
+
+        // Window resize handler
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Keyboard controls
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW':
+                case 'ArrowUp':
+                    moveForward = true;
+                    break;
+                case 'KeyS':
+                case 'ArrowDown':
+                    moveBackward = true;
+                    break;
+                case 'KeyA':
+                case 'ArrowLeft':
+                    moveLeft = true;
+                    break;
+                case 'KeyD':
+                case 'ArrowRight':
+                    moveRight = true;
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'KeyW':
+                case 'ArrowUp':
+                    moveForward = false;
+                    break;
+                case 'KeyS':
+                case 'ArrowDown':
+                    moveBackward = false;
+                    break;
+                case 'KeyA':
+                case 'ArrowLeft':
+                    moveLeft = false;
+                    break;
+                case 'KeyD':
+                case 'ArrowRight':
+                    moveRight = false;
+                    break;
+            }
+        }
+
+        // Create initial structures
+        function createInitialStructures() {
+            console.log("Creating initial structures...");
+
+            // Create a central tower
+            createTower(0, 0, 0, 10, 0xff0088);
+
+            // Create some surroundings
+            createRandomFractalTerrain();
+
+            // Add some random structures
+            addRandomStructures();
+
+            updateElementCount();
+            console.log("Initial structures created");
+        }
+
+        // Create a tower
+        function createTower(x, y, z, height, color) {
+            const baseWidth = 5;
+            const baseGeometry = new THREE.BoxGeometry(baseWidth, 2, baseWidth);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color: 0x666677 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.set(x, y, z);
+            scene.add(base);
+            structures.push(base);
+
+            // Create tower segments
+            const segments = Math.floor(height / 2);
+            let lastWidth = baseWidth;
+            let lastY = y + 1;
+
+            for (let i = 0; i < segments; i++) {
+                const ratio = 1 - (i / segments) * 0.7;
+                const segmentWidth = lastWidth * ratio;
+                const segmentHeight = 2;
+
+                const geometry = new THREE.BoxGeometry(segmentWidth, segmentHeight, segmentWidth);
+                const material = new THREE.MeshPhongMaterial({
+                    color: color,
+                    emissive: 0x220022,
+                    shininess: 30
+                });
+
+                const segment = new THREE.Mesh(geometry, material);
+                segment.position.set(x, lastY + segmentHeight / 2, z);
+                scene.add(segment);
+                structures.push(segment);
+
+                lastWidth = segmentWidth;
+                lastY += segmentHeight;
+            }
+
+            // Add a top piece
+            const topGeometry = new THREE.ConeGeometry(lastWidth * 0.7, 2, 4);
+            const topMaterial = new THREE.MeshPhongMaterial({
+                color: 0xffaaff,
+                emissive: 0x330033,
+                shininess: 50
+            });
+            const top = new THREE.Mesh(topGeometry, topMaterial);
+            top.position.set(x, lastY + 1, z);
+            scene.add(top);
+            structures.push(top);
+
+            // Add some emanating shapes
+            const numShapes = 5;
+            for (let i = 0; i < numShapes; i++) {
+                const angle = (i / numShapes) * Math.PI * 2;
+                const radius = baseWidth + 2;
+                const px = x + Math.cos(angle) * radius;
+                const pz = z + Math.sin(angle) * radius;
+
+                createFloatingCrystal(px, y + height / 2, pz, angle);
+            }
+        }
+
+        // Create a floating crystal
+        function createFloatingCrystal(x, y, z, angle) {
+            const size = 1 + Math.random() * 2;
+            const geometry = new THREE.OctahedronGeometry(size, 0);
+            const material = new THREE.MeshPhongMaterial({
+                color: new THREE.Color().setHSL(Math.random(), 0.8, 0.6),
+                emissive: new THREE.Color().setHSL(Math.random(), 0.9, 0.3),
+                shininess: 80,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            const crystal = new THREE.Mesh(geometry, material);
+            crystal.position.set(x, y, z);
+            crystal.userData = {
+                floatParams: {
+                    amplitude: 0.5 + Math.random() * 0.5,
+                    speed: 0.5 + Math.random() * 1.0,
+                    rotationSpeed: 0.01 + Math.random() * 0.02,
+                    originalY: y,
+                    angle: angle
+                }
+            };
+
+            scene.add(crystal);
+            structures.push(crystal);
+        }
+
+        // Create procedural fractal terrain
+        function createRandomFractalTerrain() {
+            console.log("Generating fractal terrain...");
+
+            const size = 50;
+            const resolution = 20;
+            const cellSize = size / resolution;
+            const height = 8;
+
+            // Create base terrain geometry
+            const geometry = new THREE.PlaneGeometry(size, size, resolution, resolution);
+            const material = new THREE.MeshPhongMaterial({
+                color: 0x3355aa,
+                shininess: 20,
+                side: THREE.DoubleSide,
+                wireframe: false
+            });
+
+            // Apply fractal displacement to vertices
+            const vertices = geometry.attributes.position.array;
+            for (let i = 0; i < vertices.length; i += 3) {
+                const x = vertices[i];
+                const z = vertices[i + 2];
+
+                // Apply multiple layers of noise
+                let elevation = 0;
+                elevation += Math.sin(x * 0.1) * Math.cos(z * 0.1) * height * 0.5;
+                elevation += Math.sin(x * 0.25 + 10) * Math.cos(z * 0.3) * height * 0.25;
+                elevation += Math.sin(x * 0.5 + 20) * Math.cos(z * 0.5) * height * 0.125;
+
+                // Apply radial falloff to create an island-like shape
+                const distance = Math.sqrt(x * x + z * z);
+                const falloff = Math.max(0, 1 - distance / (size * 0.6));
+                elevation *= falloff * falloff;
+
+                vertices[i + 1] = elevation;
+            }
+
+            // Update normals
+            geometry.computeVertexNormals();
+
+            // Create mesh and add to scene
+            const terrain = new THREE.Mesh(geometry, material);
+            terrain.rotation.x = -Math.PI / 2;
+            terrain.position.y = -0.5;
+            scene.add(terrain);
+            structures.push(terrain);
+
+            // Add some structures on the terrain
+            for (let i = 0; i < 20; i++) {
+                const x = (Math.random() - 0.5) * size * 0.8;
+                const z = (Math.random() - 0.5) * size * 0.8;
+
+                // Sample height at this position
+                let height = 0;
+                height += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 8 * 0.5;
+                height += Math.sin(x * 0.25 + 10) * Math.cos(z * 0.3) * 8 * 0.25;
+                height += Math.sin(x * 0.5 + 20) * Math.cos(z * 0.5) * 8 * 0.125;
+
+                const distance = Math.sqrt(x * x + z * z);
+                const falloff = Math.max(0, 1 - distance / (size * 0.6));
+                height *= falloff * falloff;
+
+                // Create a structure at this position
+                if (Math.random() < 0.7) {
+                    createRandomStructure(x, height, z);
+                } else {
+                    createFloatingCrystal(x, height + 3 + Math.random() * 5, z, Math.random() * Math.PI * 2);
+                }
+            }
+
+            console.log("Fractal terrain created");
+        }
+
+        // Create a random structure
+        function createRandomStructure(x, y, z) {
+            const type = Math.floor(Math.random() * 4);
+            const scale = 0.5 + Math.random() * 2;
+            const color = new THREE.Color().setHSL(Math.random(), 0.7, 0.5);
+
+            let geometry, material, structure;
+
+            switch (type) {
+                case 0: // Cube
+                    geometry = new THREE.BoxGeometry(scale * 2, scale * 4, scale * 2);
+                    material = new THREE.MeshPhongMaterial({ color: color });
+                    structure = new THREE.Mesh(geometry, material);
+                    structure.position.set(x, y + scale * 2, z);
+                    break;
+
+                case 1: // Pyramid
+                    geometry = new THREE.ConeGeometry(scale * 2, scale * 4, 4);
+                    material = new THREE.MeshPhongMaterial({ color: color });
+                    structure = new THREE.Mesh(geometry, material);
+                    structure.position.set(x, y + scale * 2, z);
+                    break;
+
+                case 2: // Sphere cluster
+                    structure = new THREE.Group();
+                    const numSpheres = 2 + Math.floor(Math.random() * 4);
+                    for (let i = 0; i < numSpheres; i++) {
+                        const sphereSize = scale * (0.5 + Math.random() * 0.5);
+                        const sphereGeometry = new THREE.SphereGeometry(sphereSize, 16, 12);
+                        const sphereMaterial = new THREE.MeshPhongMaterial({
+                            color: new THREE.Color().setHSL((Math.random() * 0.2) + (color.getHSL({}).h - 0.1), 0.7, 0.5)
+                        });
+
+                        const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+                        sphere.position.set(
+                            (Math.random() - 0.5) * scale * 2,
+                            sphereSize + Math.random() * scale * 2,
+                            (Math.random() - 0.5) * scale * 2
+                        );
+                        structure.add(sphere);
+                    }
+                    structure.position.set(x, y, z);
+                    break;
+
+                case 3: // Crystal formation
+                    structure = new THREE.Group();
+                    const numCrystals = 3 + Math.floor(Math.random() * 5);
+                    for (let i = 0; i < numCrystals; i++) {
+                        const crystalSize = scale * (0.3 + Math.random() * 0.7);
+                        const crystalGeometry = new THREE.OctahedronGeometry(crystalSize, 0);
+                        const crystalMaterial = new THREE.MeshPhongMaterial({
+                            color: new THREE.Color().setHSL((Math.random() * 0.1) + (color.getHSL({}).h - 0.05), 0.8, 0.6),
+                            emissive: new THREE.Color().setHSL((Math.random() * 0.1) + (color.getHSL({}).h - 0.05), 0.9, 0.2),
+                            shininess: 80
+                        });
+
+                        const crystal = new THREE.Mesh(crystalGeometry, crystalMaterial);
+
+                        // Position and rotate the crystal
+                        const angle = (i / numCrystals) * Math.PI * 2;
+                        const radius = crystalSize * 0.5;
+                        crystal.position.set(
+                            Math.cos(angle) * radius,
+                            crystalSize * (0.5 + Math.random() * 2),
+                            Math.sin(angle) * radius
+                        );
+
+                        crystal.rotation.set(
+                            Math.random() * Math.PI,
+                            Math.random() * Math.PI,
+                            Math.random() * Math.PI
+                        );
+
+                        structure.add(crystal);
+                    }
+                    structure.position.set(x, y, z);
+                    break;
+            }
+
+            scene.add(structure);
+            structures.push(structure);
+        }
+
+        // Add random structures
+        function addRandomStructures() {
+            console.log("Adding more structures...");
+
+            const numStructures = 10 + Math.floor(Math.random() * 10);
+            const radius = 15 + Math.random() * 20;
+
+            for (let i = 0; i < numStructures; i++) {
+                const angle = (i / numStructures) * Math.PI * 2;
+                const distance = 10 + Math.random() * radius;
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+
+                if (Math.random() < 0.2) {
+                    createTower(x, 0, z, 5 + Math.random() * 10, new THREE.Color().setHSL(Math.random(), 0.7, 0.5));
+                } else {
+                    createRandomStructure(x, 0, z);
+                }
+            }
+
+            updateElementCount();
+            console.log(`Added ${numStructures} new structures`);
+        }
+
+        // Toggle animation
+        function toggleAnimation() {
+            animationEnabled = !animationEnabled;
+            console.log(`Animation ${animationEnabled ? 'enabled' : 'disabled'}`);
+        }
+
+        // Reset view
+        function resetView() {
+            controls.reset();
+            cameraTarget.set(0, 0, 0);
+            controls.target.copy(cameraTarget);
+            console.log("View reset");
+        }
+
+        // Update element count display
+        function updateElementCount() {
+            document.getElementById('elementCount').textContent = structures.length;
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Calculate FPS
+            const now = performance.now();
+            frameCount++;
+
+            if (now - lastFpsUpdate > 1000) {
+                const fps = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
+                document.getElementById('fps').textContent = fps;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+
+            // Process camera movement using WASD keys
+            if (moveForward) cameraTarget.z -= moveSpeed;
+            if (moveBackward) cameraTarget.z += moveSpeed;
+            if (moveLeft) cameraTarget.x -= moveSpeed;
+            if (moveRight) cameraTarget.x += moveSpeed;
+
+            // Update orbit controls target
+            controls.target.lerp(cameraTarget, 0.1);
+            controls.update();
+
+            // Animate structures
+            if (animationEnabled) {
+                const time = now * 0.001; // Convert to seconds
+
+                structures.forEach(obj => {
+                    // Animate floating crystals
+                    if (obj.userData && obj.userData.floatParams) {
+                        const params = obj.userData.floatParams;
+                        obj.position.y = params.originalY + Math.sin(time * params.speed) * params.amplitude;
+                        obj.rotation.x += params.rotationSpeed;
+                        obj.rotation.y += params.rotationSpeed * 0.7;
+                        obj.rotation.z += params.rotationSpeed * 0.5;
+                    }
+                });
+            }
+
+            // Render scene
+            renderer.render(scene, camera);
+        }
+
+        // Start the application
+        window.onload = init;
+    </script>
+</body>
+
+</html>

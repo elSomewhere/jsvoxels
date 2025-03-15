@@ -1,11 +1,10 @@
+// main.js (modified for threading)
 import { CHUNK_SIZE, RENDER_DISTANCE } from './constants.js';
 import { mat4 } from './math-utils.js';
 import { VoxelTypeManager } from './voxel-types.js';
-import { WorldGenerator } from './world-generator.js';
-import { Mesher } from './mesher.js';
-import { ChunkManager } from './chunk-manager.js';
 import { Renderer } from './renderer.js';
 import { Controls } from './controls.js';
+import { ThreadedChunkManager } from './threaded-chunk-manager.js';
 
 // Main class that ties everything together
 class VoxelEngine {
@@ -30,9 +29,9 @@ class VoxelEngine {
         this.canvas = document.getElementById('glCanvas');
         this.renderer = new Renderer(this.canvas);
         this.voxelTypes = new VoxelTypeManager();
-        this.worldGenerator = new WorldGenerator();
-        this.mesher = new Mesher(this.voxelTypes);
-        this.chunkManager = new ChunkManager(this.worldGenerator, this.mesher, this.renderer);
+
+        // Use threaded chunk manager instead of old one
+        this.chunkManager = new ThreadedChunkManager(this.renderer);
         this.controls = new Controls(this.canvas, this.camera, this.chunkManager);
 
         // Start the game loop
@@ -47,10 +46,10 @@ class VoxelEngine {
             memoryElement.innerHTML = 'Memory: <span id="memory">0</span> MB';
             statsDiv.appendChild(memoryElement);
 
-            // Add octree stats display
-            const octreeElement = document.createElement('p');
-            octreeElement.innerHTML = 'Nodes: <span id="nodes">0</span>';
-            statsDiv.appendChild(octreeElement);
+            // Add worker stats display
+            const workerElement = document.createElement('p');
+            workerElement.innerHTML = 'Workers: <span id="workerStats">Initializing...</span>';
+            statsDiv.appendChild(workerElement);
 
             // Add culling stats display
             const cullingElement = document.createElement('p');
@@ -77,10 +76,6 @@ class VoxelEngine {
                 this.memoryUsage = Math.round(window.performance.memory.usedJSHeapSize / (1024 * 1024));
                 document.getElementById('memory').textContent = this.memoryUsage;
             }
-
-            // Update octree stats
-            const nodeCount = this.chunkManager.totalNodes || 0;
-            document.getElementById('nodes').textContent = nodeCount;
         }
 
         // Update controls
@@ -141,9 +136,23 @@ class VoxelEngine {
         // Request next frame
         requestAnimationFrame(this.render.bind(this));
     }
+
+    // Clean up resources when window unloads
+    dispose() {
+        if (this.chunkManager) {
+            this.chunkManager.dispose();
+        }
+    }
 }
 
 // Initialize the engine when the page loads
 window.onload = () => {
     window.voxelEngine = new VoxelEngine();
+
+    // Add event listener for cleanup
+    window.addEventListener('unload', () => {
+        if (window.voxelEngine) {
+            window.voxelEngine.dispose();
+        }
+    });
 };

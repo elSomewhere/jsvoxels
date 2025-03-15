@@ -1,0 +1,2072 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organic Nebula Fractal</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Arial', sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+            text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.8);
+            z-index: 10;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 10;
+        }
+
+        #fractal-name {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 10;
+        }
+
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+            z-index: 1000;
+        }
+
+        .slider-container {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            color: white;
+            width: 200px;
+            z-index: 10;
+            display: none;
+        }
+
+        .slider-container input {
+            width: 100%;
+        }
+
+        .param-name {
+            display: inline-block;
+            width: 120px;
+        }
+
+        #settings-toggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 11;
+        }
+
+        #visualization-mode {
+            position: absolute;
+            top: 10px;
+            right: 140px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 11;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="loading">Loading Organic Fractal Universe...</div>
+    <div id="info">Organic Nebula Fractal Visualization</div>
+    <div id="controls">
+        <div>WASD: Move | Mouse: Look | Q/E: Up/Down</div>
+        <div>R: Reset | Space: Auto-explore</div>
+        <div>1-7: Change fractal type | F: Toggle fullscreen</div>
+        <div>+/-: Increase/decrease detail</div>
+    </div>
+    <div id="fractal-name">Mandelbulb Nebula</div>
+
+    <button id="settings-toggle">Show Settings</button>
+    <button id="visualization-mode">Switch to Heightmap</button>
+
+    <div id="slider-container" class="slider-container">
+        <div>
+            <span class="param-name">Evolution Speed:</span>
+            <input type="range" id="evolution-speed" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        <div>
+            <span class="param-name">Power:</span>
+            <input type="range" id="power" min="1" max="16" step="0.1" value="8">
+        </div>
+        <div>
+            <span class="param-name">Color Cycle:</span>
+            <input type="range" id="color-cycle" min="0.1" max="2" step="0.1" value="0.5">
+        </div>
+        <div>
+            <span class="param-name">Detail Level:</span>
+            <input type="range" id="iterations" min="5" max="15" step="1" value="10">
+        </div>
+        <div>
+            <span class="param-name">Distortion:</span>
+            <input type="range" id="distortion" min="0" max="1" step="0.05" value="0.3">
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.159.0/three.module.min.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.159.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+        // Fractal names for display
+        const fractalNames = [
+            "Mandelbulb Nebula",
+            "Hybrid Julia-Bulb Organism",
+            "Folded Dimension Caves",
+            "Quantum Bubble Clusters",
+            "Organic Warp Field",
+            "Biomorphic Labyrinths",
+            "Recursive Echo Chamber"
+        ];
+
+        // Initialize core Three.js components
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: 'high-performance'  // Request high performance mode
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
+        document.body.appendChild(renderer.domElement);
+
+        // Add a subtle ambient light to avoid complete darkness
+        const ambientLight = new THREE.AmbientLight(0x111111);
+        scene.add(ambientLight);
+
+        // Set up post-processing
+        const composer = new EffectComposer(renderer);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            1.5,  // strength
+            0.4,  // radius
+            0.85  // threshold
+        );
+        composer.addPass(bloomPass);
+
+        // Custom vignette shader
+        const vignetteShader = {
+            uniforms: {
+                "tDiffuse": { value: null },
+                "offset": { value: 1.0 },
+                "darkness": { value: 1.0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform float offset;
+                uniform float darkness;
+                varying vec2 vUv;
+                void main() {
+                    vec2 uv = vUv;
+                    vec4 texel = texture2D(tDiffuse, uv);
+                    
+                    // Vignette effect
+                    vec2 coord = (uv - 0.5) * 2.0;
+                    float dist = length(coord);
+                    float vignette = smoothstep(0.8, offset * 0.799, dist * (darkness + 0.1));
+                    texel.rgb *= vignette;
+                    
+                    gl_FragColor = texel;
+                }
+            `
+        };
+
+        const vignettePass = new ShaderPass(vignetteShader);
+        vignettePass.uniforms.offset.value = 1.2;
+        vignettePass.uniforms.darkness.value = 1.5;
+        composer.addPass(vignettePass);
+
+        // Fractal parameters
+        const fractalParams = {
+            power: 8.0,
+            iterations: 10,
+            bailout: 4.0,
+            colorOffset: 0.0,
+            colorScale: 3.0,
+            colorCycle: 0.5,
+            zoom: 2.0,
+            autoExplore: false,
+            fractalType: 1,
+            evolutionSpeed: 0.5,
+            distortion: 0.3,
+            orbitTraps: true,
+            warpFactor: 0.5,
+            foldingStrength: 1.0,
+            detailLevel: 1.0,
+            visualizationMode: 'volumetric' // 'volumetric' or 'heightmap'
+        };
+
+        // Fragment shader for raymarching the fractal
+        const fragmentShader = `
+        precision highp float;
+        
+        uniform vec2 resolution;
+        uniform float time;
+        uniform vec3 viewerPosition; 
+        uniform mat4 cameraWorldMatrix;
+        uniform mat4 cameraProjectionMatrixInverse;
+        
+        // Fractal parameters
+        uniform float power;
+        uniform int iterations;
+        uniform float bailout;
+        uniform float colorOffset;
+        uniform float colorScale;
+        uniform float colorCycle;
+        uniform int fractalType;
+        uniform float distortion;
+        uniform float warpFactor;
+        uniform float foldingStrength;
+        uniform float detailLevel;
+        
+        // Noise functions
+        vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+        vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+        
+        float snoise(vec3 v) {
+            const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+            const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+            
+            // First corner
+            vec3 i  = floor(v + dot(v, C.yyy));
+            vec3 x0 = v - i + dot(i, C.xxx);
+            
+            // Other corners
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min(g.xyz, l.zxy);
+            vec3 i2 = max(g.xyz, l.zxy);
+            
+            vec3 x1 = x0 - i1 + C.xxx;
+            vec3 x2 = x0 - i2 + C.yyy;
+            vec3 x3 = x0 - D.yyy;
+            
+            // Permutations
+            i = mod289(i);
+            vec4 p = permute(permute(permute(
+                     i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                     + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                     + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+                     
+            // Gradients: 7x7 points over a square, mapped onto an octahedron.
+            float n_ = 0.142857142857; // 1.0/7.0
+            vec3 ns = n_ * D.wyz - D.xzx;
+            
+            vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+            
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_);
+            
+            vec4 x = x_ *ns.x + ns.yyyy;
+            vec4 y = y_ *ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+            
+            vec4 b0 = vec4(x.xy, y.xy);
+            vec4 b1 = vec4(x.zw, y.zw);
+            
+            vec4 s0 = floor(b0)*2.0 + 1.0;
+            vec4 s1 = floor(b1)*2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+            
+            vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+            vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+            
+            vec3 p0 = vec3(a0.xy, h.x);
+            vec3 p1 = vec3(a0.zw, h.y);
+            vec3 p2 = vec3(a1.xy, h.z);
+            vec3 p3 = vec3(a1.zw, h.w);
+            
+            // Normalise gradients
+            vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+            p0 *= norm.x;
+            p1 *= norm.y;
+            p2 *= norm.z;
+            p3 *= norm.w;
+            
+            // Mix final noise value
+            vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+            m = m * m;
+            return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+        }
+        
+        // FBM (Fractal Brownian Motion)
+        float fbm(vec3 p, int octaves) {
+            float value = 0.0;
+            float amplitude = 1.0;
+            float frequency = 1.0;
+            float lacunarity = 2.0;
+            float persistence = 0.5;
+            
+            for (int i = 0; i < 8; i++) {
+                if (i >= octaves) break;
+                value += amplitude * snoise(p * frequency);
+                frequency *= lacunarity;
+                amplitude *= persistence;
+            }
+            
+            return value;
+        }
+        
+        // Domain warping - creates more complexity
+        vec3 domainWarp(vec3 p, float t, float strength) {
+            vec3 q = vec3(
+                fbm(p + vec3(0.0, 0.1 * t, 0.2 * t), 2),
+                fbm(p + vec3(0.3 * t, 0.0, 0.4 * t), 2),
+                fbm(p + vec3(0.5 * t, 0.6 * t, 0.0), 2)
+            );
+            
+            vec3 r = vec3(
+                fbm(p + 4.0 * q + vec3(1.7 * t, 9.2, 2.1), 2),
+                fbm(p + 4.0 * q + vec3(8.3, 2.8 * t, 2.5), 2),
+                fbm(p + 4.0 * q + vec3(1.2, 8.0, 4.3 * t), 2)
+            );
+            
+            return p + strength * r;
+        }
+        
+        // Smooth minimum function for blending SDF fields
+        float smin(float a, float b, float k) {
+            float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+            return mix(b, a, h) - k * h * (1.0 - h);
+        }
+        
+        // Enhanced Mandelbulb DE (Type 1)
+        float enhancedMandelbulbDE(vec3 pos, float t) {
+            vec3 z = pos;
+            vec3 z0 = pos;
+            float dr = 1.0;
+            float r = 0.0;
+            
+            // Dynamic parameters
+            float dynamicPower = power + 2.0 * sin(t * 0.1);
+            
+            // Orbit traps for more organic detail
+            float minDist1 = 1000.0; // Sphere trap
+            float minDist2 = 1000.0; // Line trap
+            
+            for (int i = 0; i < 15; i++) {
+                if (i >= iterations) break;
+                
+                r = length(z);
+                if (r > bailout) break;
+                
+                // Orbit traps for more detailed coloring
+                minDist1 = min(minDist1, r);
+                minDist2 = min(minDist2, abs(z.x - z.y));
+                
+                // Convert to polar coordinates
+                float theta = acos(z.z / r);
+                float phi = atan(z.y, z.x);
+                
+                // Apply distortion field
+                float distortAmount = distortion * (0.5 + 0.5 * sin(t * 0.1));
+                float distortField = distortAmount * fbm(z * 0.2 + vec3(t * 0.05, t * 0.03, t * 0.04), 2);
+                
+                // Scale dr
+                dr = pow(r, dynamicPower - 1.0) * dynamicPower * dr + 1.0;
+                
+                // Scale and rotate with power
+                float zr = pow(r, dynamicPower);
+                theta = theta * dynamicPower + distortField;
+                phi = phi * dynamicPower + distortField * 0.7;
+                
+                // Convert back to cartesian coordinates
+                z = zr * vec3(
+                    sin(theta) * cos(phi),
+                    sin(theta) * sin(phi),
+                    cos(theta)
+                );
+                
+                // Add time-based evolution
+                z += z0 * 0.1 + 0.1 * vec3(
+                    sin(t * 0.1 + z.x * 0.5),
+                    cos(t * 0.15 + z.y * 0.5),
+                    sin(t * 0.12 + z.z * 0.5)
+                );
+            }
+            
+            // Use orbit traps to add details to the distance field
+            float orbitFactor = (minDist1 * 0.3 + minDist2 * 0.2) * 0.1;
+            
+            // The final distance estimation with orbit trap influence
+            return 0.5 * log(r) * r / dr - orbitFactor;
+        }
+        
+        // Hybrid Julia-Bulb (Type 2) - Combines Quaternion Julia and Mandelbulb
+        float hybridJuliaBulbDE(vec3 pos, float t) {
+            vec4 z = vec4(pos, 0.0);
+            float dr = 1.0;
+            float r = 0.0;
+            
+            // Time-evolving quaternion c value
+            vec4 c = vec4(
+                0.45 * sin(t * 0.1),
+                0.4 * cos(t * 0.13),
+                0.35 * sin(t * 0.07),
+                0.3 * cos(t * 0.09)
+            );
+            
+            // Orbit traps
+            float sphereTrap = 1000.0;
+            float planeTrap = 1000.0;
+            
+            for (int i = 0; i < 15; i++) {
+                if (i >= iterations) break;
+                
+                // Orbit traps
+                sphereTrap = min(sphereTrap, length(z.xyz));
+                planeTrap = min(planeTrap, abs(z.y));
+                
+                r = length(z);
+                if (r > bailout) break;
+                
+                // Switch between quaternion and hypercomplex rotation
+                if (i % 2 == 0) {
+                    // Quaternion multiplication
+                    float zr = r;
+                    float zo = atan(z.y, z.x);
+                    float zi = acos(z.z / zr);
+                    float za = atan(z.w, length(z.xyz));
+                    
+                    // Apply power formula (quaternion version)
+                    float powerFactor = power * (0.8 + 0.2 * sin(t * 0.2));
+                    zr = pow(zr, powerFactor);
+                    zo *= powerFactor;
+                    zi *= powerFactor;
+                    za *= powerFactor;
+                    
+                    // Convert back
+                    z = zr * vec4(
+                        cos(za) * sin(zi) * cos(zo),
+                        cos(za) * sin(zi) * sin(zo),
+                        cos(za) * cos(zi),
+                        sin(za)
+                    );
+                    
+                    // Add c
+                    z += c + 0.1 * sin(t * 0.2 + length(z) * 2.0);
+                } else {
+                    // Hypercomplex distortion
+                    z = vec4(
+                        z.x * z.x - z.y * z.y - z.z * z.z + z.w * z.w,
+                        2.0 * z.x * z.y,
+                        2.0 * z.x * z.z,
+                        2.0 * z.x * z.w
+                    );
+                    
+                    // Add julia seed with time evolution
+                    z += c * (0.8 + 0.2 * sin(t * 0.3));
+                }
+                
+                dr = dr * 2.0 * r;
+            }
+            
+            // Blend in the orbit traps for added detail
+            float orbitFactor = (sphereTrap * 0.4 + planeTrap * 0.1) * 0.1;
+            
+            return 0.5 * log(r) * r / dr - orbitFactor * 0.2;
+        }
+        
+        // Folded Dimension DE (Type 3) - Creates complex folds
+        float foldedDimensionDE(vec3 pos, float t) {
+            vec3 z = pos;
+            
+            // Scaling factors that evolve over time
+            float scale = 2.0 + 0.5 * sin(t * 0.1);
+            float foldFactor = foldingStrength * (1.0 + 0.3 * sin(t * 0.13));
+            
+            // Initialize orbit traps
+            float minDist = 1000.0;
+            float minDist2 = 1000.0;
+            
+            // Calculate a center point that moves over time for the orbit trap
+            vec3 center = vec3(
+                sin(t * 0.2) * 0.5,
+                cos(t * 0.25) * 0.5,
+                sin(t * 0.17) * 0.5
+            );
+            
+            for (int i = 0; i < 15; i++) {
+                if (i >= iterations) break;
+                
+                // Orbit traps
+                minDist = min(minDist, length(z - center));
+                minDist2 = min(minDist2, abs(dot(normalize(z), normalize(center))));
+                
+                // Complex folding operations
+                // Absolute value folds
+                z = abs(z);
+                if (z.x - z.y < 0.0) { float tmp = z.y; z.y = z.x; z.x = tmp; }
+                if (z.x - z.z < 0.0) { float tmp = z.z; z.z = z.x; z.x = tmp; }
+                if (z.y - z.z < 0.0) { float tmp = z.z; z.z = z.y; z.y = tmp; }
+                
+                // Additional folds for more complex shapes
+                // Rotational fold
+                float theta = atan(z.y, z.x);
+                float r = length(z.xy);
+                float foldCount = 5.0 + 2.0 * sin(t * 0.2);
+                theta = mod(theta, 3.14159 * 2.0 / foldCount) - 3.14159 / foldCount;
+                z.x = r * cos(theta);
+                z.y = r * sin(theta);
+                
+                // Spherical folding
+                float r2 = dot(z, z);
+                if (r2 < 0.25) {
+                    z *= 4.0;
+                } else if (r2 < 1.0) {
+                    z /= r2;
+                }
+                
+                // Scale and offset
+                z = z * scale - foldFactor * (scale - 1.0);
+                
+                // Apply domain distortion for organic feel
+                z += 0.1 * vec3(
+                    sin(t * 0.2 + z.x * 2.0),
+                    cos(t * 0.15 + z.y * 2.0),
+                    sin(t * 0.17 + z.z * 2.0)
+                );
+            }
+            
+            // Use orbit traps for detailed surfaces
+            float orbitFactor = minDist * 0.2 + minDist2 * 0.1;
+            
+            return (length(z) - 1.5) / scale - orbitFactor * 0.2;
+        }
+        
+        // Quantum Bubble Clusters (Type 4)
+        float quantumBubbleDE(vec3 pos, float t) {
+            vec3 z = pos;
+            float dr = 1.0;
+            
+            // Apply domain warping for initial distortion
+            z = domainWarp(z, t * 0.1, warpFactor);
+            
+            // Cluster centers that evolve over time
+            vec3 center1 = vec3(
+                sin(t * 0.11) * 1.5,
+                cos(t * 0.13) * 1.5,
+                sin(t * 0.17) * 1.5
+            );
+            
+            vec3 center2 = vec3(
+                cos(t * 0.19) * 1.5,
+                sin(t * 0.23) * 1.5,
+                cos(t * 0.29) * 1.5
+            );
+            
+            vec3 center3 = vec3(
+                sin(t * 0.31) * 1.5,
+                sin(t * 0.37) * 1.5,
+                cos(t * 0.41) * 1.5
+            );
+            
+            // Bubble generation
+            float bubbleField = 0.0;
+            float distortion = 0.0;
+            
+            for (int i = 0; i < 4; i++) {
+                if (i >= int(iterations / 3)) break;
+                
+                // Generate bubble spheres with varying sizes
+                float d1 = length(z - center1) - (0.7 + 0.3 * sin(t * 0.3 + float(i)));
+                float d2 = length(z - center2) - (0.6 + 0.3 * cos(t * 0.4 + float(i)));
+                float d3 = length(z - center3) - (0.5 + 0.3 * sin(t * 0.5 + float(i)));
+                
+                // Smoothly blend the bubbles
+                float d = smin(d1, smin(d2, d3, 0.5), 0.7);
+                
+                // Add distortion to the bubble surfaces
+                distortion += 0.1 * fbm(z * (0.5 + 0.2 * float(i)) + vec3(t * 0.05), 2);
+                
+                // Apply the distortion
+                bubbleField = smin(bubbleField, d + distortion, 0.3);
+                
+                // Evolve position for next iteration
+                z = 1.3 * z + vec3(0.1 * sin(t + z.z), 0.1 * cos(t + z.x), 0.1 * sin(t + z.y));
+            }
+            
+            return bubbleField * 0.7;
+        }
+        
+        // Organic Warp Field (Type 5)
+        float organicWarpFieldDE(vec3 pos, float t) {
+            // Apply multiple layers of domain warping for intricate organic structures
+            vec3 p = pos;
+            
+            // First layer of warping
+            p = domainWarp(p, t * 0.15, warpFactor * 1.5);
+            
+            // Second layer with different parameters
+            p = domainWarp(p, t * 0.1 + 10.0, warpFactor * 0.8);
+            
+            // Base structure - start with a sphere
+            float baseSphere = length(p) - 1.0;
+            
+            // Add progressive detail through multiple noise layers
+            float detail = 0.0;
+            float scale = 1.0;
+            float amp = 0.5;
+            
+            for (int i = 0; i < 5; i++) {
+                if (i >= int(iterations / 2)) break;
+                
+                // Add multi-octave noise distortion
+                detail += amp * fbm(p * scale + vec3(t * 0.05 * float(i)), 2);
+                scale *= 2.0;
+                amp *= 0.5;
+            }
+            
+            // Create detailed tentacle/vein structures
+            float tentacles = 0.0;
+            for (int i = 0; i < 6; i++) {
+                if (i >= int(iterations / 2)) break;
+                
+                // Create flowing vine-like structures
+                float angle = float(i) * 3.14159 * 2.0 / 6.0;
+                vec3 dir = vec3(cos(angle), sin(angle), 0.0);
+                dir = normalize(dir + 0.2 * vec3(
+                    sin(t * 0.2 + float(i)),
+                    cos(t * 0.25 + float(i)),
+                    sin(t * 0.3 + float(i))
+                ));
+                
+                // Calculate distance to the sine-wave tentacle
+                vec3 toP = p - 0.5 * dir;
+                float dist = length(cross(toP, dir));
+                float lengthAlongDir = dot(toP, dir);
+                
+                // Make the tentacle undulate
+                float wave = 0.1 * sin(lengthAlongDir * 5.0 + t * 0.5);
+                float tentacle = dist - (0.05 + wave) * exp(-0.1 * abs(lengthAlongDir));
+                
+                tentacles = smin(tentacles, tentacle, 0.2);
+            }
+            
+            // Combine base shape with details and tentacles
+            float finalShape = smin(baseSphere + detail * 0.5, tentacles, 0.3);
+            
+            return finalShape * 0.7;
+        }
+        
+        // Biomorphic Labyrinths (Type 6)
+        float biomorphicLabyrinthsDE(vec3 pos, float t) {
+            vec3 p = pos;
+            
+            // Apply oscillating twist transform
+            float twistAmount = 0.5 * sin(t * 0.2);
+            float ct = cos(p.y * twistAmount);
+            float st = sin(p.y * twistAmount);
+            p.xz = mat2(ct, -st, st, ct) * p.xz;
+            
+            // Apply domain warping for organic feel
+            p = domainWarp(p, t * 0.07, warpFactor * 0.6);
+            
+            // Generate labyrinth structure using periodic functions
+            float scale = 0.5 + 0.2 * sin(t * 0.15);
+            vec3 q = mod(p, scale) - 0.5 * scale;
+            
+            // Calculate distance to walls
+            float walls = min(
+                min(
+                    length(q.xy) - (0.1 + 0.05 * sin(p.z * 3.0 + t)),
+                    length(q.yz) - (0.1 + 0.05 * cos(p.x * 3.0 + t * 1.1))
+                ),
+                length(q.xz) - (0.1 + 0.05 * sin(p.y * 3.0 + t * 1.2))
+            );
+            
+            // Add corridor structure
+            float corridors = length(q) - 0.15;
+            
+            // Add organic bulges and nodes along the corridors
+            float nodes = 1000.0;
+            for (int i = 0; i < 5; i++) {
+                if (i >= int(iterations / 2)) break;
+                
+                // Node positions
+                vec3 nodePos = vec3(
+                    scale * (0.5 + cos(float(i) * 2.0 + t * 0.2)),
+                    scale * (0.5 + sin(float(i) * 2.0 + t * 0.3)),
+                    scale * (0.5 + cos(float(i) * 2.0 + t * 0.25))
+                );
+                
+                vec3 cellPos = scale * floor(p / scale) + nodePos;
+                float nodeDist = length(p - cellPos) - (0.1 + 0.05 * sin(t * 0.3 + float(i)));
+                nodes = min(nodes, nodeDist);
+            }
+            
+            // Combine structures
+            float d = smin(smin(walls, corridors, 0.1), nodes, 0.2);
+            
+            // Add organic detail
+            float detail = 0.08 * fbm(p * 3.0 + vec3(t * 0.05), 2);
+            
+            return d + detail;
+        }
+        
+        // Recursive Echo Chamber (Type 7)
+        float recursiveEchoChamberDE(vec3 pos, float t) {
+            vec3 p = pos;
+            
+            // Create a basic shape that will be recursively transformed
+            float mainShape = length(p) - 1.0;
+            
+            // Apply initial distortion
+            p = domainWarp(p, t * 0.1, warpFactor * 0.5);
+            
+            // Define transformation parameters
+            float scale = 1.0;
+            float offset = 0.0;
+            
+            // Store the echo structure
+            float result = mainShape;
+            
+            // Create recursive echoes
+            for (int i = 0; i < 5; i++) {
+                if (i >= int(iterations / 2)) break;
+                
+                // Scale down and offset for each iteration
+                scale *= 0.6 + 0.1 * sin(t * 0.2 + float(i));
+                
+                // Rotate the space a bit
+                float angle1 = 0.5 * t + 1.0 * float(i);
+                float angle2 = 0.4 * t + 1.2 * float(i);
+                float angle3 = 0.3 * t + 1.5 * float(i);
+                
+                float c1 = cos(angle1), s1 = sin(angle1);
+                float c2 = cos(angle2), s2 = sin(angle2);
+                float c3 = cos(angle3), s3 = sin(angle3);
+                
+                mat3 rot = mat3(
+                    c1, -s1, 0.0,
+                    s1,  c1, 0.0,
+                    0.0, 0.0, 1.0
+                ) * mat3(
+                    c2, 0.0, -s2,
+                    0.0, 1.0, 0.0,
+                    s2, 0.0,  c2
+                ) * mat3(
+                    1.0, 0.0, 0.0,
+                    0.0,  c3, -s3,
+                    0.0,  s3,  c3
+                );
+                
+                // Transform position
+                p = rot * p * scale;
+                
+                // Displace by a time-evolving offset
+                p += 0.5 * vec3(
+                    sin(t * 0.3 + float(i) * 1.2),
+                    cos(t * 0.35 + float(i) * 1.3),
+                    sin(t * 0.4 + float(i) * 1.4)
+                );
+                
+                // Calculate the shape at this iteration
+                float iterShape = length(p) - (0.8 + 0.2 * sin(t * 0.25 + float(i)));
+                
+                // Add distortion to the shape
+                iterShape += 0.1 * fbm(p * 2.0 + vec3(t * 0.05), 2);
+                
+                // Smooth union with previous result
+                result = smin(result, iterShape, 0.3);
+            }
+            
+            return result * 0.7;
+        }
+        
+        float sceneSDF(vec3 p, float t) {
+            vec3 transformedPos = p;
+            
+            // Apply evolution field - less aggressive warping for better performance
+            float noiseScale = 0.05 + 0.02 * sin(t * 0.1);
+            float noiseStrength = distortion * (0.2 + 0.1 * sin(t * 0.2));
+            vec3 evolutionField = vec3(
+                fbm(transformedPos * noiseScale + vec3(0.0, 0.0, t * 0.1), 2),
+                fbm(transformedPos * noiseScale + vec3(t * 0.07, 0.0, 0.0), 2),
+                fbm(transformedPos * noiseScale + vec3(0.0, t * 0.05, 0.0), 2)
+            );
+            
+            transformedPos += evolutionField * noiseStrength;
+            
+            // Choose fractal type
+            float de = 1000.0;
+            
+            if (fractalType == 1) {
+                de = enhancedMandelbulbDE(transformedPos, t);
+            } else if (fractalType == 2) {
+                de = hybridJuliaBulbDE(transformedPos, t);
+            } else if (fractalType == 3) {
+                de = foldedDimensionDE(transformedPos, t);
+            } else if (fractalType == 4) {
+                de = quantumBubbleDE(transformedPos, t);
+            } else if (fractalType == 5) {
+                de = organicWarpFieldDE(transformedPos, t);
+            } else if (fractalType == 6) {
+                de = biomorphicLabyrinthsDE(transformedPos, t);
+            } else if (fractalType == 7) {
+                de = recursiveEchoChamberDE(transformedPos, t);
+            }
+            
+            return de * detailLevel;
+        }
+        
+        vec3 estimateNormal(vec3 p, float t) {
+            float epsilon = 0.001;
+            vec2 e = vec2(epsilon, 0.0);
+            
+            return normalize(vec3(
+                sceneSDF(p + e.xyy, t) - sceneSDF(p - e.xyy, t),
+                sceneSDF(p + e.yxy, t) - sceneSDF(p - e.yxy, t),
+                sceneSDF(p + e.yyx, t) - sceneSDF(p - e.yyx, t)
+            ));
+        }
+        
+        vec3 applyFog(vec3 color, float distance, vec3 rayDir, float t) {
+            // More atmospheric fog with depth cues
+            vec3 fogColor = vec3(0.02, 0.03, 0.05) + 
+                            0.05 * vec3(sin(t * 0.3), sin(t * 0.35), sin(t * 0.4));
+            
+            // Add slight gradient based on ray direction
+            fogColor += 0.02 * vec3(0.5 + 0.5 * rayDir.y);
+            
+            // Adjust fog density based on fractal type
+            float fogDensity = 0.1 + 0.05 * sin(t * 0.2);
+            float fogAmount = 1.0 - exp(-distance * fogDensity);
+            
+            return mix(color, fogColor, fogAmount);
+        }
+        
+        vec3 palette(float t) {
+            // Vibrant, organic palettes
+            t = fract(t);
+            
+            // Different palettes based on fractal type
+            if (fractalType == 1) {
+                // Blue-purple-cyan for Mandelbulb
+                return vec3(
+                    0.5 + 0.5 * sin(6.28318 * (t * 1.0 + colorOffset)),
+                    0.5 + 0.5 * sin(6.28318 * (t * 1.0 + colorOffset + 0.333)),
+                    0.5 + 0.5 * sin(6.28318 * (t * 1.0 + colorOffset + 0.667))
+                );
+            } else if (fractalType == 2) {
+                // Gold-red-orange for Hybrid Julia-Bulb
+                return vec3(
+                    0.8 + 0.3 * sin(6.28318 * (t + colorOffset)),
+                    0.4 + 0.4 * sin(6.28318 * (t + colorOffset + 0.2)),
+                    0.1 + 0.3 * sin(6.28318 * (t + colorOffset + 0.1))
+                );
+            } else if (fractalType == 3) {
+                // Green-blue-cyan for Folded Dimension
+                return vec3(
+                    0.2 + 0.4 * sin(6.28318 * (t + colorOffset + 0.1)),
+                    0.5 + 0.5 * sin(6.28318 * (t + colorOffset)),
+                    0.5 + 0.5 * sin(6.28318 * (t + colorOffset + 0.3))
+                );
+            } else if (fractalType == 4) {
+                // Purple-pink-blue for Quantum Bubble
+                return vec3(
+                    0.6 + 0.4 * sin(6.28318 * (t + colorOffset + 0.9)),
+                    0.4 + 0.4 * sin(6.28318 * (t + colorOffset + 0.1)),
+                    0.6 + 0.4 * sin(6.28318 * (t + colorOffset + 0.3))
+                );
+            } else if (fractalType == 5) {
+                // Bio-luminescent greens and blues
+                return vec3(
+                    0.1 + 0.4 * sin(6.28318 * (t + colorOffset + 0.9)),
+                    0.6 + 0.4 * sin(6.28318 * (t + colorOffset + 0.3)),
+                    0.3 + 0.4 * sin(6.28318 * (t + colorOffset + 0.6))
+                );
+            } else if (fractalType == 6) {
+                // Warm organic reds and oranges
+                return vec3(
+                    0.7 + 0.3 * sin(6.28318 * (t + colorOffset)),
+                    0.3 + 0.3 * sin(6.28318 * (t + colorOffset + 0.3)),
+                    0.2 + 0.2 * sin(6.28318 * (t + colorOffset + 0.1))
+                );
+            } else {
+                // Ethereal purples and teals for Echo Chamber
+                return vec3(
+                    0.5 + 0.4 * sin(6.28318 * (t + colorOffset + 0.8)),
+                    0.3 + 0.4 * sin(6.28318 * (t + colorOffset + 0.2)),
+                    0.7 + 0.3 * sin(6.28318 * (t + colorOffset + 0.5))
+                );
+            }
+        }
+        
+        vec3 calculateColor(vec3 p, vec3 normal, float t, float steps, float totalDist) {
+            // Use position, normal, and distance for more varied coloring
+            // Removed step count from coloring calculation as it causes dark areas
+            float colorValue = colorScale * (
+                0.6 * dot(normal, vec3(1.0)) + 
+                0.4 * fbm(p * 0.5 + normal * 0.2 + vec3(t * 0.05), 2)
+            );
+            
+            float cycleVal = fract(colorValue * colorCycle);
+            vec3 color = palette(cycleVal);
+            
+            // Enhanced lighting with multiple light sources to prevent dark spots
+            vec3 lightPos1 = vec3(sin(t * 0.1) * 5.0, 2.0 + cos(t * 0.15) * 2.0, cos(t * 0.1) * 5.0);
+            vec3 lightDir1 = normalize(lightPos1 - p);
+            float diffuse1 = max(0.0, dot(normal, lightDir1));
+            
+            // Second light source coming from a different direction
+            vec3 lightPos2 = vec3(cos(t * 0.13) * 5.0, 3.0 + sin(t * 0.11) * 2.0, sin(t * 0.09) * 5.0);
+            vec3 lightDir2 = normalize(lightPos2 - p);
+            float diffuse2 = max(0.0, dot(normal, lightDir2));
+            
+            // Increased ambient light to prevent dark areas - FIX 1: more ambient light
+            float ambient = 0.6;
+            
+            // Specular highlights from both light sources
+            vec3 viewDir = normalize(-p);
+            vec3 halfwayDir1 = normalize(lightDir1 + viewDir);
+            float specular1 = pow(max(dot(normal, halfwayDir1), 0.0), 32.0) * 0.3;
+            
+            vec3 halfwayDir2 = normalize(lightDir2 + viewDir);
+            float specular2 = pow(max(dot(normal, halfwayDir2), 0.0), 32.0) * 0.2;
+            
+            // Add depth-based highlights - FIX 2: prevent extreme darkening at depth
+            float depthFactor = max(0.4, exp(-totalDist * 0.1));
+            
+            // Add glow based on distance field gradient
+            float glow = exp(-abs(sceneSDF(p, t) * 10.0));
+            
+            // Combine all lighting components - using both light sources
+            // FIX 3: Add baseline glow to prevent complete darkness
+            vec3 finalColor = color * (ambient + 0.6 * diffuse1 + 0.4 * diffuse2) + 
+                             (specular1 + specular2) * vec3(1.0) * depthFactor +
+                             0.15 * color; // Add a baseline glow
+            
+            // Add fractal-type specific effects
+            if (fractalType == 1) {
+                // Mandelbulb: Add stronger glow in cavities
+                finalColor += glow * palette(fract(t * 0.1)) * 0.5;
+            } else if (fractalType == 2) {
+                // Julia-Bulb: Add subtle sparkles
+                finalColor += pow(fbm(p * 10.0 + vec3(t), 3), 5.0) * vec3(1.0) * 0.5;
+            } else if (fractalType == 4) {
+                // Quantum Bubble: Add bubble refraction effect
+                finalColor += pow(1.0 - abs(dot(normal, viewDir)), 4.0) * vec3(0.5, 0.7, 1.0) * 0.3;
+            } else if (fractalType == 5) {
+                // Organic Warp: Add subtle veins
+                float veins = pow(fbm(p * 5.0 + normal * 2.0 + vec3(t * 0.02), 3), 3.0);
+                finalColor *= 1.0 + veins * 0.5;
+            } else if (fractalType == 7) {
+                // Echo Chamber: Add ethereal glow
+                finalColor += 0.2 * vec3(0.5, 0.2, 0.7) * pow(fbm(p * 3.0 + vec3(t * 0.1), 2), 2.0);
+            }
+            
+            return finalColor;
+        }
+        
+        void main() {
+            // Normalized device coordinates
+            vec2 uv = (gl_FragCoord.xy - 0.5 * resolution.xy) / resolution.y;
+            
+            // Calculate ray direction
+            vec4 ndcRay = vec4(uv.x, uv.y, 1.0, 1.0);
+            vec4 clipRay = cameraProjectionMatrixInverse * ndcRay;
+            vec3 rayDir = normalize((cameraWorldMatrix * vec4(clipRay.xyz / clipRay.w, 0.0)).xyz);
+            
+            // Ray origin (camera position)
+            vec3 rayOrigin = viewerPosition;
+            
+            // Raymarching parameters
+            float maxDist = 20.0;
+            float epsilon = 0.001;
+            
+            // Raymarch
+            float t = 0.0;
+            float totalDistance = 0.0;
+            int steps = 0;
+            vec3 pos = rayOrigin;
+            bool hit = false;
+            
+            // Adaptive stepping for better performance while maintaining quality
+            for (int i = 0; i < 100; i++) {
+                if (steps >= 100) break; // Safety for WebGL
+                steps++;
+                
+                pos = rayOrigin + totalDistance * rayDir;
+                
+                float distance = sceneSDF(pos, time);
+                
+                // Adaptive step size based on distance
+                float stepFactor = max(distance * 0.5, epsilon);
+                totalDistance += stepFactor;
+                
+                if (distance < epsilon) {
+                    hit = true;
+                    break;
+                }
+                
+                if (totalDistance > maxDist) {
+                    break;
+                }
+            }
+            
+            // Coloring
+            vec3 color;
+            
+            if (hit) {
+                vec3 normal = estimateNormal(pos, time);
+                
+                // Completely removed step-count based ambient occlusion which was causing dark spots
+                color = calculateColor(pos, normal, time, 0.0, totalDistance);
+                
+                // Add depth effect with gentler fog
+                color = applyFog(color, totalDistance, rayDir, time);
+            } else {
+                // Enhanced background with subtle patterns
+                float bg = 0.08 * max(0.0, dot(rayDir, vec3(0.0, 1.0, 0.0)));
+                
+                // Base color based on fractal type - brighter background colors
+                vec3 bgBase;
+                if (fractalType == 1) bgBase = vec3(0.02, 0.04, 0.08);
+                else if (fractalType == 2) bgBase = vec3(0.08, 0.04, 0.02);
+                else if (fractalType == 3) bgBase = vec3(0.02, 0.08, 0.04);
+                else if (fractalType == 4) bgBase = vec3(0.06, 0.02, 0.08);
+                else if (fractalType == 5) bgBase = vec3(0.02, 0.08, 0.06);
+                else if (fractalType == 6) bgBase = vec3(0.08, 0.04, 0.02);
+                else bgBase = vec3(0.04, 0.02, 0.08);
+                
+                color = bgBase + bg + 
+                        0.08 * fbm(rayDir * 5.0 + vec3(time * 0.02), 3) * palette(fract(time * 0.05));
+                
+                // Add stronger hints of depth
+                color += 0.05 * pow(1.0 - abs(dot(rayDir, normalize(vec3(sin(time * 0.1), 0.2, cos(time * 0.1))))), 4.0) * palette(fract(time * 0.1 + 0.5));
+            }
+            
+            // No vignette effect at all - completely removed
+            
+            // Gamma correction
+            color = pow(color, vec3(0.4545));
+            
+            gl_FragColor = vec4(color, 1.0);
+        }
+        `;
+
+        // Set up the raymarching shader
+        const uniforms = {
+            resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+            time: { value: 0.0 },
+            viewerPosition: { value: new THREE.Vector3() },
+            cameraWorldMatrix: { value: new THREE.Matrix4() },
+            cameraProjectionMatrixInverse: { value: new THREE.Matrix4() },
+            power: { value: fractalParams.power },
+            iterations: { value: fractalParams.iterations },
+            bailout: { value: fractalParams.bailout },
+            colorOffset: { value: fractalParams.colorOffset },
+            colorScale: { value: fractalParams.colorScale },
+            colorCycle: { value: fractalParams.colorCycle },
+            fractalType: { value: fractalParams.fractalType },
+            distortion: { value: fractalParams.distortion },
+            warpFactor: { value: fractalParams.warpFactor },
+            foldingStrength: { value: fractalParams.foldingStrength },
+            detailLevel: { value: fractalParams.detailLevel }
+        };
+
+        // Create a full-screen quad for the shader
+        const geometry = new THREE.PlaneGeometry(2, 2);
+        const material = new THREE.ShaderMaterial({
+            fragmentShader,
+            uniforms,
+            depthWrite: false,
+            depthTest: false
+        });
+
+        const quad = new THREE.Mesh(geometry, material);
+        scene.add(quad);
+
+        // Camera setup with improved defaults
+        camera.position.set(0, 0, 2.5);
+
+        // First person controls with better defaults
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.rotateSpeed = 0.5;
+        controls.zoomSpeed = 0.7;
+        controls.panSpeed = 0.8;
+        controls.keyPanSpeed = 0.5;
+        controls.target.set(0, 0, 0);
+
+        // Keyboard movement
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false,
+            q: false,
+            e: false,
+            r: false,
+            space: false,
+            plus: false,
+            minus: false,
+            f: false
+        };
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'w') keys.w = true;
+            if (e.key.toLowerCase() === 'a') keys.a = true;
+            if (e.key.toLowerCase() === 's') keys.s = true;
+            if (e.key.toLowerCase() === 'd') keys.d = true;
+            if (e.key.toLowerCase() === 'q') keys.q = true;
+            if (e.key.toLowerCase() === 'e') keys.e = true;
+            if (e.key.toLowerCase() === 'r') keys.r = true;
+            if (e.key === ' ') keys.space = true;
+            if (e.key === '+' || e.key === '=') keys.plus = true;
+            if (e.key === '-' || e.key === '_') keys.minus = true;
+            if (e.key.toLowerCase() === 'f') keys.f = true;
+
+            // Fractal type selection
+            if (e.key >= '1' && e.key <= '7') {
+                fractalParams.fractalType = parseInt(e.key);
+                document.getElementById('fractal-name').textContent = fractalNames[fractalParams.fractalType - 1];
+            }
+
+            // Toggle fullscreen
+            if (e.key.toLowerCase() === 'f' && !keys.f) {
+                toggleFullscreen();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key.toLowerCase() === 'w') keys.w = false;
+            if (e.key.toLowerCase() === 'a') keys.a = false;
+            if (e.key.toLowerCase() === 's') keys.s = false;
+            if (e.key.toLowerCase() === 'd') keys.d = false;
+            if (e.key.toLowerCase() === 'q') keys.q = false;
+            if (e.key.toLowerCase() === 'e') keys.e = false;
+            if (e.key.toLowerCase() === 'r') keys.r = false;
+            if (e.key === ' ') keys.space = false;
+            if (e.key === '+' || e.key === '=') keys.plus = false;
+            if (e.key === '-' || e.key === '_') keys.minus = false;
+            if (e.key.toLowerCase() === 'f') keys.f = false;
+
+            // Toggle auto-explore
+            if (e.key === ' ') {
+                fractalParams.autoExplore = !fractalParams.autoExplore;
+                document.getElementById('info').textContent =
+                    fractalParams.autoExplore ? 'Auto-explore: ON' : 'Organic Nebula Fractal Visualization';
+            }
+
+            // Reset position
+            if (e.key.toLowerCase() === 'r') {
+                camera.position.set(0, 0, 2.5);
+                controls.target.set(0, 0, 0);
+            }
+        });
+
+        // Handle window resize with improved handling
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', onWindowResize);
+
+        // Movement speed - adaptive based on distance from origin
+        function getAdaptiveSpeed(position) {
+            // Base speed
+            let baseSpeed = 0.05;
+
+            // Scale speed based on distance from origin - move faster when further away
+            const distFromOrigin = position.length();
+            if (distFromOrigin > 5.0) {
+                baseSpeed *= 1.0 + (distFromOrigin - 5.0) * 0.1;
+            }
+
+            return baseSpeed;
+        }
+
+        // Function to generate interesting movement targets
+        function generateInterestingTarget(time, fractalType) {
+            // Different patterns for different fractals
+            if (fractalType <= 2) {
+                // Spiral pattern for mandelbulb-type fractals
+                const angle = time * 0.15;
+                const radius = 1.5 + Math.sin(time * 0.05) * 0.5;
+                return new THREE.Vector3(
+                    Math.sin(angle) * radius,
+                    Math.cos(angle * 0.7) * 0.8,
+                    Math.cos(angle) * radius
+                );
+            } else if (fractalType <= 4) {
+                // More chaotic pattern for folded fractals
+                return new THREE.Vector3(
+                    Math.sin(time * 0.2) * Math.cos(time * 0.3) * 2.0,
+                    Math.sin(time * 0.25) * 1.0,
+                    Math.cos(time * 0.15) * Math.sin(time * 0.1) * 2.0
+                );
+            } else {
+                // Wave-like pattern for organic types
+                return new THREE.Vector3(
+                    Math.sin(time * 0.12) * 2.0,
+                    Math.sin(time * 0.2) * Math.cos(time * 0.1) * 1.0,
+                    Math.cos(time * 0.17) * 2.0
+                );
+            }
+        }
+
+        // Toggle fullscreen
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.log(`Error attempting to enable fullscreen: ${err.message}`);
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        // Setup UI controls
+        const settingsToggle = document.getElementById('settings-toggle');
+        const sliderContainer = document.getElementById('slider-container');
+
+        settingsToggle.addEventListener('click', function () {
+            if (sliderContainer.style.display === 'none' || sliderContainer.style.display === '') {
+                sliderContainer.style.display = 'block';
+                settingsToggle.textContent = 'Hide Settings';
+            } else {
+                sliderContainer.style.display = 'none';
+                settingsToggle.textContent = 'Show Settings';
+            }
+        });
+
+        // Setup sliders
+        document.getElementById('evolution-speed').addEventListener('input', function (e) {
+            fractalParams.evolutionSpeed = parseFloat(e.target.value);
+        });
+
+        document.getElementById('power').addEventListener('input', function (e) {
+            fractalParams.power = parseFloat(e.target.value);
+        });
+
+        document.getElementById('color-cycle').addEventListener('input', function (e) {
+            fractalParams.colorCycle = parseFloat(e.target.value);
+        });
+
+        document.getElementById('iterations').addEventListener('input', function (e) {
+            fractalParams.iterations = parseInt(e.target.value);
+        });
+
+        document.getElementById('distortion').addEventListener('input', function (e) {
+            fractalParams.distortion = parseFloat(e.target.value);
+        });
+
+        // Performance monitoring
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let fps = 0;
+
+        function updateFPS() {
+            const currentTime = performance.now();
+            const delta = currentTime - lastTime;
+
+            if (delta >= 1000) {
+                fps = Math.round((frameCount * 1000) / delta);
+                frameCount = 0;
+                lastTime = currentTime;
+
+                // Adaptive quality based on FPS
+                if (fps < 20 && fractalParams.detailLevel < 1.5) {
+                    fractalParams.detailLevel += 0.1;  // Reduce detail if FPS is low
+                } else if (fps > 40 && fractalParams.detailLevel > 0.7) {
+                    fractalParams.detailLevel -= 0.05;  // Increase detail if FPS is high
+                }
+            }
+
+            frameCount++;
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Update FPS counter and adaptive quality
+            updateFPS();
+
+            // Update time
+            const time = performance.now() * 0.001;
+            uniforms.time.value = time * fractalParams.evolutionSpeed;
+
+            // Handle keyboard movement
+            const moveVector = new THREE.Vector3();
+            const camDirection = new THREE.Vector3();
+            camera.getWorldDirection(camDirection);
+
+            // Get adaptive movement speed
+            const moveSpeed = getAdaptiveSpeed(camera.position);
+
+            const forwardVector = camDirection.clone();
+            const rightVector = new THREE.Vector3().crossVectors(forwardVector, camera.up).normalize();
+
+            if (keys.w) moveVector.add(forwardVector.clone().multiplyScalar(moveSpeed));
+            if (keys.s) moveVector.sub(forwardVector.clone().multiplyScalar(moveSpeed));
+            if (keys.a) moveVector.sub(rightVector.clone().multiplyScalar(moveSpeed));
+            if (keys.d) moveVector.add(rightVector.clone().multiplyScalar(moveSpeed));
+            if (keys.q) moveVector.add(new THREE.Vector3(0, moveSpeed, 0));
+            if (keys.e) moveVector.sub(new THREE.Vector3(0, moveSpeed, 0));
+
+            // Change detail level with + and - keys
+            if (keys.plus) {
+                fractalParams.iterations = Math.min(15, fractalParams.iterations + 0.1);
+                document.getElementById('iterations').value = fractalParams.iterations;
+            }
+            if (keys.minus) {
+                fractalParams.iterations = Math.max(5, fractalParams.iterations - 0.1);
+                document.getElementById('iterations').value = fractalParams.iterations;
+            }
+
+            // Auto-explore mode with improved targeting
+            if (fractalParams.autoExplore) {
+                const target = generateInterestingTarget(time, fractalParams.fractalType);
+                const toTarget = target.clone().sub(camera.position).normalize().multiplyScalar(moveSpeed * 0.5);
+                moveVector.add(toTarget);
+
+                // Smoothly rotate view to target
+                controls.target.lerp(target, 0.01);
+            }
+
+            camera.position.add(moveVector);
+            if (!fractalParams.autoExplore) {
+                controls.target.add(moveVector);
+            }
+
+            // Update fractal parameters with animation based on type
+            switch (fractalParams.fractalType) {
+                case 1: // Mandelbulb
+                    fractalParams.power = 8.0 + Math.sin(time * 0.1) * 2.0;
+                    fractalParams.colorOffset = (time * 0.05) % 1.0;
+                    break;
+                case 2: // Hybrid Julia
+                    fractalParams.power = 7.0 + Math.sin(time * 0.15) * 1.5;
+                    fractalParams.colorOffset = (time * 0.07) % 1.0;
+                    break;
+                case 3: // Folded Dimension
+                    fractalParams.foldingStrength = 1.0 + Math.sin(time * 0.12) * 0.3;
+                    fractalParams.colorOffset = (time * 0.06) % 1.0;
+                    break;
+                case 4: // Quantum Bubble
+                    fractalParams.warpFactor = 0.5 + Math.sin(time * 0.08) * 0.2;
+                    fractalParams.colorOffset = (time * 0.08) % 1.0;
+                    break;
+                case 5: // Organic Warp
+                    fractalParams.warpFactor = 0.7 + Math.sin(time * 0.07) * 0.3;
+                    fractalParams.colorOffset = (time * 0.04) % 1.0;
+                    break;
+                case 6: // Biomorphic
+                    fractalParams.distortion = 0.3 + Math.sin(time * 0.09) * 0.1;
+                    fractalParams.colorOffset = (time * 0.03) % 1.0;
+                    break;
+                case 7: // Echo Chamber
+                    fractalParams.power = 6.0 + Math.sin(time * 0.11) * 1.0;
+                    fractalParams.colorOffset = (time * 0.09) % 1.0;
+                    break;
+            }
+
+            // Update uniform values
+            uniforms.power.value = fractalParams.power;
+            uniforms.iterations.value = fractalParams.iterations;
+            uniforms.bailout.value = fractalParams.bailout;
+            uniforms.colorOffset.value = fractalParams.colorOffset;
+            uniforms.colorScale.value = fractalParams.colorScale;
+            uniforms.colorCycle.value = fractalParams.colorCycle;
+            uniforms.fractalType.value = fractalParams.fractalType;
+            uniforms.distortion.value = fractalParams.distortion;
+            uniforms.warpFactor.value = fractalParams.warpFactor;
+            uniforms.foldingStrength.value = fractalParams.foldingStrength;
+            uniforms.detailLevel.value = fractalParams.detailLevel;
+
+            // Update camera matrices
+            camera.updateMatrixWorld();
+            camera.updateProjectionMatrix();
+            uniforms.viewerPosition.value.copy(camera.position);
+            uniforms.cameraWorldMatrix.value.copy(camera.matrixWorld);
+            uniforms.cameraProjectionMatrixInverse.value.copy(camera.projectionMatrix).invert();
+
+            // Render the appropriate scene based on visualization mode
+            if (fractalParams.visualizationMode === 'volumetric') {
+                controls.update();
+                composer.render();
+            } else {
+                // For heightmap mode, we need to update the heightmap occasionally 
+                // (not every frame for performance)
+                if (frameCount % 30 === 0) { // Update every 30 frames
+                    generateHeightmapTerrain();
+                }
+
+                // Update the heightmap camera position based on user movement
+                if (heightmapCamera) {
+                    heightmapCamera.position.add(moveVector);
+                    heightmapCamera.lookAt(heightmapCamera.position.x, 0, heightmapCamera.position.z + 1);
+                }
+
+                renderer.render(heightmapScene, heightmapCamera);
+            }
+        }
+
+        // Hide loading screen after initialization
+        window.addEventListener('load', function () {
+            setTimeout(function () {
+                document.getElementById('loading').style.display = 'none';
+            }, 1000);
+        });
+
+        // Start animation
+        animate();
+
+        // Heightmap generation and terrain visualization
+        let heightmapMesh;
+        let heightmapScene;
+        let heightmapCamera;
+
+        function createHeightmapVisualization() {
+            // Create a separate scene for the heightmap visualization
+            heightmapScene = new THREE.Scene();
+
+            // Add fog to the scene for depth
+            heightmapScene.fog = new THREE.FogExp2(0x000033, 0.02);
+
+            // Create a camera appropriate for terrain viewing
+            heightmapCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            heightmapCamera.position.set(0, 10, 20);
+            heightmapCamera.lookAt(0, 0, 0);
+
+            // Add lights for the terrain
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(5, 10, 7.5);
+            heightmapScene.add(directionalLight);
+
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+            hemiLight.position.set(0, 20, 0);
+            heightmapScene.add(hemiLight);
+
+            // Generate heightmap terrain
+            generateHeightmapTerrain();
+        }
+
+        function generateHeightmapTerrain() {
+            // Remove existing terrain if any
+            if (heightmapMesh) {
+                heightmapScene.remove(heightmapMesh);
+                heightmapMesh.geometry.dispose();
+                heightmapMesh.material.dispose();
+            }
+
+            // Parameters for the terrain grid
+            const gridSize = 100;
+            const gridSegments = 100;
+            const terrainSize = 50;
+
+            // Create the geometry
+            const geometry = new THREE.PlaneGeometry(
+                terrainSize,
+                terrainSize,
+                gridSegments,
+                gridSegments
+            );
+
+            // Sample the fractal at each vertex to create the heightmap
+            const positions = geometry.attributes.position.array;
+            const time = performance.now() * 0.001 * fractalParams.evolutionSpeed;
+
+            // Temporary vectors for calculations
+            const worldPos = new THREE.Vector3();
+            const samplePoint = new THREE.Vector3();
+
+            // Find height range to normalize heights
+            let minHeight = Infinity;
+            let maxHeight = -Infinity;
+
+            // First pass - determine height range
+            for (let i = 0; i < positions.length; i += 3) {
+                // Get the x,z coordinates (y is up in 3D space)
+                const x = positions[i];
+                const z = positions[i + 2];
+
+                // Scale coordinates for fractal sampling
+                samplePoint.set(
+                    x * 0.04,
+                    0,
+                    z * 0.04
+                );
+
+                // Sample different fractal types differently
+                let height;
+
+                switch (fractalParams.fractalType) {
+                    case 1: // Mandelbulb
+                        worldPos.copy(samplePoint).multiplyScalar(1.0);
+                        height = enhancedMandelbulbDE(worldPos, time);
+                        break;
+                    case 2: // Hybrid Julia
+                        worldPos.copy(samplePoint).multiplyScalar(0.8);
+                        height = hybridJuliaBulbDE(worldPos, time);
+                        break;
+                    case 3: // Folded Dimension
+                        worldPos.copy(samplePoint).multiplyScalar(0.6);
+                        height = foldedDimensionDE(worldPos, time);
+                        break;
+                    case 4: // Quantum Bubble
+                        worldPos.copy(samplePoint).multiplyScalar(1.2);
+                        height = quantumBubbleDE(worldPos, time);
+                        break;
+                    case 5: // Organic Warp
+                        worldPos.copy(samplePoint).multiplyScalar(1.5);
+                        height = organicWarpFieldDE(worldPos, time);
+                        break;
+                    case 6: // Biomorphic
+                        worldPos.copy(samplePoint).multiplyScalar(0.7);
+                        height = biomorphicLabyrinthsDE(worldPos, time);
+                        break;
+                    case 7: // Echo Chamber
+                        worldPos.copy(samplePoint).multiplyScalar(0.5);
+                        height = recursiveEchoChamberDE(worldPos, time);
+                        break;
+                    default:
+                        height = 0;
+                }
+
+                // Invert the height for most fractals (distance functions return positive 
+                // values outside the shape, so we invert to get peaks where the fractal is)
+                height = -height * 10; // Scale the height for better visualization
+
+                // Update min/max
+                minHeight = Math.min(minHeight, height);
+                maxHeight = Math.max(maxHeight, height);
+            }
+
+            // Second pass - apply heights and normalize
+            const range = maxHeight - minHeight;
+            const heightScale = 10; // Scale factor for height variation
+
+            for (let i = 0; i < positions.length; i += 3) {
+                // Get the x,z coordinates
+                const x = positions[i];
+                const z = positions[i + 2];
+
+                // Scale coordinates for fractal sampling
+                samplePoint.set(
+                    x * 0.04,
+                    0,
+                    z * 0.04
+                );
+
+                // Sample the height again
+                let height;
+
+                switch (fractalParams.fractalType) {
+                    case 1: // Mandelbulb
+                        worldPos.copy(samplePoint).multiplyScalar(1.0);
+                        height = enhancedMandelbulbDE(worldPos, time);
+                        break;
+                    case 2: // Hybrid Julia
+                        worldPos.copy(samplePoint).multiplyScalar(0.8);
+                        height = hybridJuliaBulbDE(worldPos, time);
+                        break;
+                    case 3: // Folded Dimension
+                        worldPos.copy(samplePoint).multiplyScalar(0.6);
+                        height = foldedDimensionDE(worldPos, time);
+                        break;
+                    case 4: // Quantum Bubble
+                        worldPos.copy(samplePoint).multiplyScalar(1.2);
+                        height = quantumBubbleDE(worldPos, time);
+                        break;
+                    case 5: // Organic Warp
+                        worldPos.copy(samplePoint).multiplyScalar(1.5);
+                        height = organicWarpFieldDE(worldPos, time);
+                        break;
+                    case 6: // Biomorphic
+                        worldPos.copy(samplePoint).multiplyScalar(0.7);
+                        height = biomorphicLabyrinthsDE(worldPos, time);
+                        break;
+                    case 7: // Echo Chamber
+                        worldPos.copy(samplePoint).multiplyScalar(0.5);
+                        height = recursiveEchoChamberDE(worldPos, time);
+                        break;
+                    default:
+                        height = 0;
+                }
+
+                // Invert and normalize the height
+                height = -height * 10;
+                const normalizedHeight = ((height - minHeight) / range) * heightScale;
+
+                // Apply the height to the y coordinate
+                positions[i + 1] = normalizedHeight;
+            }
+
+            // Update the vertices
+            geometry.attributes.position.needsUpdate = true;
+
+            // Compute normals for proper lighting
+            geometry.computeVertexNormals();
+
+            // Create a material that varies color by height
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                flatShading: false,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+
+            // Add vertex colors based on height
+            const colorAttribute = new THREE.BufferAttribute(
+                new Float32Array(positions.length), 3
+            );
+
+            for (let i = 0; i < positions.length; i += 3) {
+                const y = positions[i + 1];
+                const normalizedY = (y / heightScale);
+
+                // Get color from the palette function based on height
+                const color = paletteFunction(
+                    normalizedY,
+                    time * 0.01,
+                    fractalParams.fractalType
+                );
+
+                colorAttribute.setXYZ(i / 3, color.x, color.y, color.z);
+            }
+
+            geometry.setAttribute('color', colorAttribute);
+
+            // Create the mesh and add it to the scene
+            heightmapMesh = new THREE.Mesh(geometry, material);
+            heightmapMesh.rotation.x = -Math.PI / 2; // Rotate to horizontal
+            heightmapScene.add(heightmapMesh);
+        }
+
+        // Helper function to get colors from palette without using the shader
+        function paletteFunction(t, offset, fractalType) {
+            // Normalize t to 0-1 range
+            t = Math.min(1, Math.max(0, t));
+
+            // Different palettes based on fractal type
+            let r, g, b;
+
+            switch (fractalType) {
+                case 1: // Blue-purple-cyan for Mandelbulb
+                    r = 0.5 + 0.5 * Math.sin(6.28318 * (t * 1.0 + offset));
+                    g = 0.5 + 0.5 * Math.sin(6.28318 * (t * 1.0 + offset + 0.333));
+                    b = 0.5 + 0.5 * Math.sin(6.28318 * (t * 1.0 + offset + 0.667));
+                    break;
+                case 2: // Gold-red-orange for Hybrid Julia-Bulb
+                    r = 0.8 + 0.3 * Math.sin(6.28318 * (t + offset));
+                    g = 0.4 + 0.4 * Math.sin(6.28318 * (t + offset + 0.2));
+                    b = 0.1 + 0.3 * Math.sin(6.28318 * (t + offset + 0.1));
+                    break;
+                case 3: // Green-blue-cyan for Folded Dimension
+                    r = 0.2 + 0.4 * Math.sin(6.28318 * (t + offset + 0.1));
+                    g = 0.5 + 0.5 * Math.sin(6.28318 * (t + offset));
+                    b = 0.5 + 0.5 * Math.sin(6.28318 * (t + offset + 0.3));
+                    break;
+                case 4: // Purple-pink-blue for Quantum Bubble
+                    r = 0.6 + 0.4 * Math.sin(6.28318 * (t + offset + 0.9));
+                    g = 0.4 + 0.4 * Math.sin(6.28318 * (t + offset + 0.1));
+                    b = 0.6 + 0.4 * Math.sin(6.28318 * (t + offset + 0.3));
+                    break;
+                case 5: // Bio-luminescent greens and blues
+                    r = 0.1 + 0.4 * Math.sin(6.28318 * (t + offset + 0.9));
+                    g = 0.6 + 0.4 * Math.sin(6.28318 * (t + offset + 0.3));
+                    b = 0.3 + 0.4 * Math.sin(6.28318 * (t + offset + 0.6));
+                    break;
+                case 6: // Warm organic reds and oranges
+                    r = 0.7 + 0.3 * Math.sin(6.28318 * (t + offset));
+                    g = 0.3 + 0.3 * Math.sin(6.28318 * (t + offset + 0.3));
+                    b = 0.2 + 0.2 * Math.sin(6.28318 * (t + offset + 0.1));
+                    break;
+                case 7: // Ethereal purples and teals for Echo Chamber
+                    r = 0.5 + 0.4 * Math.sin(6.28318 * (t + offset + 0.8));
+                    g = 0.3 + 0.4 * Math.sin(6.28318 * (t + offset + 0.2));
+                    b = 0.7 + 0.3 * Math.sin(6.28318 * (t + offset + 0.5));
+                    break;
+                default:
+                    r = g = b = t; // Grayscale fallback
+            }
+
+            return new THREE.Vector3(r, g, b);
+        }
+
+        // Helper functions for heightmap generation - fractal functions outside the shader
+        function enhancedMandelbulbDE(pos, t) {
+            let z = new THREE.Vector3().copy(pos);
+            let z0 = new THREE.Vector3().copy(pos);
+            let dr = 1.0;
+            let r = 0.0;
+
+            // Dynamic parameters
+            let dynamicPower = fractalParams.power + 2.0 * Math.sin(t * 0.1);
+
+            // Orbit traps for more organic detail
+            let minDist1 = 1000.0; // Sphere trap
+            let minDist2 = 1000.0; // Line trap
+
+            for (let i = 0; i < fractalParams.iterations; i++) {
+                r = z.length();
+                if (r > fractalParams.bailout) break;
+
+                // Orbit traps
+                minDist1 = Math.min(minDist1, r);
+                minDist2 = Math.min(minDist2, Math.abs(z.x - z.y));
+
+                // Convert to polar coordinates
+                let theta = Math.acos(z.z / r);
+                let phi = Math.atan2(z.y, z.x);
+
+                // Apply distortion field
+                let distortAmount = fractalParams.distortion * (0.5 + 0.5 * Math.sin(t * 0.1));
+                let distortField = distortAmount * 0.3; // Simplified for JavaScript
+
+                // Scale dr
+                dr = Math.pow(r, dynamicPower - 1.0) * dynamicPower * dr + 1.0;
+
+                // Scale and rotate with power
+                let zr = Math.pow(r, dynamicPower);
+                theta = theta * dynamicPower + distortField;
+                phi = phi * dynamicPower + distortField * 0.7;
+
+                // Convert back to cartesian coordinates
+                z.set(
+                    zr * Math.sin(theta) * Math.cos(phi),
+                    zr * Math.sin(theta) * Math.sin(phi),
+                    zr * Math.cos(theta)
+                );
+
+                // Add time-based evolution
+                z.add(z0.clone().multiplyScalar(0.1)).add(new THREE.Vector3(
+                    0.1 * Math.sin(t * 0.1 + z.x * 0.5),
+                    0.1 * Math.cos(t * 0.15 + z.y * 0.5),
+                    0.1 * Math.sin(t * 0.12 + z.z * 0.5)
+                ));
+            }
+
+            // Use orbit traps to add details to the distance field
+            let orbitFactor = (minDist1 * 0.3 + minDist2 * 0.2) * 0.1;
+
+            // The final distance estimation with orbit trap influence
+            return 0.5 * Math.log(r) * r / dr - orbitFactor;
+        }
+
+        function hybridJuliaBulbDE(pos, t) {
+            // Simplified version for JavaScript
+            let z = new THREE.Vector4(pos.x, pos.y, pos.z, 0.0);
+            let r = Math.sqrt(z.x * z.x + z.y * z.y + z.z * z.z + z.w * z.w);
+
+            // Time-evolving quaternion c value
+            let c = new THREE.Vector4(
+                0.45 * Math.sin(t * 0.1),
+                0.4 * Math.cos(t * 0.13),
+                0.35 * Math.sin(t * 0.07),
+                0.3 * Math.cos(t * 0.09)
+            );
+
+            for (let i = 0; i < 5; i++) {
+                // Simplified quaternion math for JS version
+                r = Math.sqrt(z.x * z.x + z.y * z.y + z.z * z.z + z.w * z.w);
+                if (r > fractalParams.bailout) break;
+
+                // Simplified version
+                z.set(
+                    z.x * z.x - z.y * z.y - z.z * z.z - z.w * z.w,
+                    2.0 * z.x * z.y,
+                    2.0 * z.x * z.z,
+                    2.0 * z.x * z.w
+                );
+
+                // Add c with time evolution
+                z.x += c.x + 0.1 * Math.sin(t * 0.2);
+                z.y += c.y + 0.1 * Math.cos(t * 0.2);
+                z.z += c.z + 0.1 * Math.sin(t * 0.3);
+                z.w += c.w + 0.1 * Math.cos(t * 0.3);
+            }
+
+            return 0.5 * Math.log(r) * r / (r + 0.5);
+        }
+
+        function foldedDimensionDE(pos, t) {
+            // Simplified version for JavaScript
+            let z = new THREE.Vector3().copy(pos);
+
+            // Scale factor evolving over time
+            let scale = 2.0 + 0.5 * Math.sin(t * 0.1);
+
+            for (let i = 0; i < 5; i++) {
+                // Fold operations (simplified)
+                z.x = Math.abs(z.x);
+                z.y = Math.abs(z.y);
+                z.z = Math.abs(z.z);
+
+                // Basic transform
+                z.multiplyScalar(scale);
+
+                // Add evolution
+                z.x += 0.2 * Math.sin(t * 0.2 + z.x);
+                z.y += 0.2 * Math.cos(t * 0.25 + z.y);
+                z.z += 0.2 * Math.sin(t * 0.3 + z.z);
+            }
+
+            return z.length() / Math.pow(scale, 5) - 0.1;
+        }
+
+        function quantumBubbleDE(pos, t) {
+            // Very simplified for JavaScript
+            let d1 = pos.length() - (0.8 + 0.2 * Math.sin(t * 0.5));
+            let d2 = new THREE.Vector3(pos.x - Math.sin(t) * 2, pos.y, pos.z).length() -
+                (0.7 + 0.2 * Math.cos(t * 0.4));
+
+            return Math.min(d1, d2) * 0.5;
+        }
+
+        function organicWarpFieldDE(pos, t) {
+            // Basic sphere with time variation for JS
+            return pos.length() - (1.0 + 0.3 * Math.sin(t * 0.2 + pos.x + pos.y + pos.z));
+        }
+
+        function biomorphicLabyrinthsDE(pos, t) {
+            // Very simplified for JavaScript
+            let p = new THREE.Vector3().copy(pos);
+            p.x += 0.2 * Math.sin(t * 0.2 + p.z * 2);
+            p.z += 0.2 * Math.cos(t * 0.3 + p.x * 2);
+
+            return p.length() - (0.8 + 0.2 * Math.sin(p.x * 3 + p.z * 3 + t));
+        }
+
+        function recursiveEchoChamberDE(pos, t) {
+            // Basic simplified echo version for JS
+            return pos.length() - (0.8 + 0.3 * Math.sin(pos.x * 2 + pos.y * 2 + pos.z * 2 + t * 0.2));
+        }
+
+        // Initialize the heightmap visualization
+        createHeightmapVisualization();
+
+        // Optional: Audio reactivity with improved implementation
+        try {
+            const setupAudio = async () => {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const analyser = audioContext.createAnalyser();
+                analyser.fftSize = 512; // Higher resolution
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+
+                // Get microphone input
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const source = audioContext.createMediaStreamSource(stream);
+                    source.connect(analyser);
+
+                    // Add visual indicator that audio is active
+                    const audioIndicator = document.createElement('div');
+                    audioIndicator.style.position = 'absolute';
+                    audioIndicator.style.bottom = '60px';
+                    audioIndicator.style.left = '10px';
+                    audioIndicator.style.color = '#0f0';
+                    audioIndicator.style.background = 'rgba(0,0,0,0.7)';
+                    audioIndicator.style.padding = '5px 10px';
+                    audioIndicator.style.borderRadius = '5px';
+                    audioIndicator.style.fontSize = '12px';
+                    audioIndicator.textContent = 'Audio Reactive: ON';
+                    document.body.appendChild(audioIndicator);
+
+                    // Function to update audio visualizer
+                    function updateAudio() {
+                        analyser.getByteFrequencyData(dataArray);
+
+                        // Calculate average levels for different frequency bands with smoother response
+                        const bassRange = { min: 0, max: 10 };
+                        const midRange = { min: 10, max: 30 };
+                        const highRange = { min: 30, max: 70 };
+
+                        const bass = average(dataArray.slice(bassRange.min, bassRange.max));
+                        const mid = average(dataArray.slice(midRange.min, midRange.max));
+                        const high = average(dataArray.slice(highRange.min, highRange.max));
+
+                        // Smoothing for the values to prevent jarring changes
+                        const smoothingFactor = 0.8; // Higher = smoother
+
+                        // Smoothly adjust fractal parameters based on audio
+                        fractalParams.power = lerp(fractalParams.power, 8.0 + bass / 128.0 * 4.0, 1.0 - smoothingFactor);
+                        fractalParams.colorScale = lerp(fractalParams.colorScale, 3.0 + mid / 256.0 * 2.0, 1.0 - smoothingFactor);
+                        fractalParams.evolutionSpeed = lerp(fractalParams.evolutionSpeed, 0.5 + high / 256.0 * 0.5, 1.0 - smoothingFactor);
+                        fractalParams.distortion = lerp(fractalParams.distortion, 0.3 + mid / 256.0 * 0.4, 1.0 - smoothingFactor);
+
+                        // Update UI sliders
+                        document.getElementById('power').value = fractalParams.power;
+                        document.getElementById('evolution-speed').value = fractalParams.evolutionSpeed;
+                        document.getElementById('distortion').value = fractalParams.distortion;
+
+                        // Beat detection with adaptive threshold
+                        const beatThreshold = 180;
+                        if (bass > beatThreshold) {
+                            // Trigger a morph event on strong bass
+                            fractalParams.bailout = 4.0 + Math.random() * 2.0;
+                            fractalParams.colorCycle = 0.5 + Math.random() * 0.5;
+                            document.getElementById('color-cycle').value = fractalParams.colorCycle;
+
+                            // Visual feedback for beat detection
+                            audioIndicator.style.color = '#ff0';
+                            setTimeout(() => { audioIndicator.style.color = '#0f0'; }, 100);
+                        }
+
+                        // Update audio indicator to show levels
+                        audioIndicator.textContent = `Audio Reactive: ON [B:${Math.round(bass)}, M:${Math.round(mid)}, H:${Math.round(high)}]`;
+
+                        requestAnimationFrame(updateAudio);
+                    }
+
+                    function average(arr) {
+                        return arr.reduce((sum, val) => sum + val, 0) / arr.length;
+                    }
+
+                    function lerp(a, b, t) {
+                        return a + (b - a) * t;
+                    }
+
+                    updateAudio();
+                } catch (e) {
+                    console.error("Error accessing microphone:", e);
+                }
+            };
+
+            // Add button for audio activation with better styling
+            const audioButton = document.createElement('button');
+            audioButton.textContent = 'Enable Audio Reactivity';
+            audioButton.style.position = 'absolute';
+            audioButton.style.bottom = '10px';
+            audioButton.style.right = '10px';
+            audioButton.style.padding = '8px 12px';
+            audioButton.style.borderRadius = '4px';
+            audioButton.style.backgroundColor = '#444';
+            audioButton.style.color = 'white';
+            audioButton.style.border = '1px solid #666';
+            audioButton.style.cursor = 'pointer';
+            audioButton.style.fontFamily = 'Arial, sans-serif';
+            audioButton.style.fontSize = '12px';
+            audioButton.style.zIndex = '20';
+
+            audioButton.onmouseover = () => {
+                audioButton.style.backgroundColor = '#555';
+            };
+
+            audioButton.onmouseout = () => {
+                audioButton.style.backgroundColor = '#444';
+            };
+
+            audioButton.onclick = () => {
+                setupAudio().catch(console.error);
+                audioButton.style.display = 'none';
+            };
+
+            document.body.appendChild(audioButton);
+
+            // Add visualization mode toggle button functionality
+            document.getElementById('visualization-mode').addEventListener('click', function () {
+                // Toggle between volumetric and heightmap modes
+                if (fractalParams.visualizationMode === 'volumetric') {
+                    fractalParams.visualizationMode = 'heightmap';
+                    this.textContent = 'Switch to Volumetric';
+
+                    // Set up heightmap camera
+                    heightmapCamera.position.copy(camera.position);
+                    heightmapCamera.position.y = 10;
+                    heightmapCamera.lookAt(heightmapCamera.position.x, 0, heightmapCamera.position.z + 10);
+
+                    // Generate the terrain
+                    generateHeightmapTerrain();
+                } else {
+                    fractalParams.visualizationMode = 'volumetric';
+                    this.textContent = 'Switch to Heightmap';
+                }
+            });
+        } catch (e) {
+            console.log('Audio reactivity not available in this browser');
+        }
+    </script>
+</body>
+
+</html>

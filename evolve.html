@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolving Fractal Voxel World</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: monospace;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #error {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: red;
+            font-family: monospace;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 400px;
+            word-wrap: break-word;
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">Evolving Fractal Voxel World<br>
+        <span id="fps">FPS: 0</span><br>
+        <span id="voxels">Voxels: 0</span>
+    </div>
+    <div id="error"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+    <script>
+        // Error handler
+        window.onerror = function (message, source, lineno, colno, error) {
+            const errorElement = document.getElementById('error');
+            errorElement.textContent = `Error: ${message}`;
+            errorElement.style.display = 'block';
+            console.error(error);
+        };
+
+        // Main function
+        function init() {
+            // Configuration
+            const config = {
+                worldSize: 32,      // World dimensions in voxels
+                voxelSize: 1,       // Size of each voxel
+                noiseScale: 0.05,   // Scale of noise
+                speed: 0.2,         // Speed of terrain evolution
+                amplitude: 16,      // Height amplitude
+                colorMode: 0,       // Color scheme index
+                showWireframe: false // Show wireframe
+            };
+
+            // Scene setup
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050520);
+            scene.fog = new THREE.FogExp2(0x6060a0, 0.01);
+
+            // Camera setup
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(config.worldSize * config.voxelSize / 2, config.amplitude * 1.5, config.worldSize * config.voxelSize * 1.5);
+            camera.lookAt(config.worldSize * config.voxelSize / 2, 0, config.worldSize * config.voxelSize / 2);
+
+            // Renderer setup
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x666666);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Color palettes
+            const colorPalettes = [
+                // Dreamscape
+                [0x000066, 0x0055aa, 0x0099cc, 0x00ccaa, 0x55aaff, 0xaaddff, 0xffffff],
+                // Sunset
+                [0x330033, 0x660066, 0x993366, 0xff6633, 0xffaa33, 0xffff99],
+                // Alien
+                [0x001122, 0x003355, 0x00aa88, 0x33ff99, 0xaaff66, 0x77ddaa]
+            ];
+
+            // Create voxel geometry and material
+            const voxelGeometry = new THREE.BoxGeometry(config.voxelSize, config.voxelSize, config.voxelSize);
+            const voxelMaterial = new THREE.MeshPhongMaterial({
+                vertexColors: false,  // Changed from true to false
+                flatShading: true,
+                shininess: 0
+            });
+
+            // Create instanced mesh - using let instead of const so it can be reassigned
+            let maxVoxels = config.worldSize * config.worldSize * config.amplitude;
+            let instancedMesh = new THREE.InstancedMesh(voxelGeometry, voxelMaterial, maxVoxels);
+            instancedMesh.count = 0;
+            instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            // Initialize the instance color buffer
+            instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(maxVoxels * 3), 3);
+            scene.add(instancedMesh);
+
+            // Add wireframe if needed
+            let wireframe = null;
+
+            // Helpers
+            const dummy = new THREE.Object3D();
+            const color = new THREE.Color();
+
+            // Simple noise function
+            function noise(x, y, z) {
+                // Hash function
+                function hash(x, y, z) {
+                    return Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453 % 1;
+                }
+
+                // Get integer and fractional parts
+                const xi = Math.floor(x);
+                const yi = Math.floor(y);
+                const zi = Math.floor(z);
+
+                const xf = x - xi;
+                const yf = y - yi;
+                const zf = z - zi;
+
+                // Smoothstep for interpolation
+                const sx = smoothStep(xf);
+                const sy = smoothStep(yf);
+                const sz = smoothStep(zf);
+
+                // Interpolate between corner values
+                return lerp(
+                    lerp(
+                        lerp(hash(xi, yi, zi), hash(xi + 1, yi, zi), sx),
+                        lerp(hash(xi, yi + 1, zi), hash(xi + 1, yi + 1, zi), sx),
+                        sy
+                    ),
+                    lerp(
+                        lerp(hash(xi, yi, zi + 1), hash(xi + 1, yi, zi + 1), sx),
+                        lerp(hash(xi, yi + 1, zi + 1), hash(xi + 1, yi + 1, zi + 1), sx),
+                        sy
+                    ),
+                    sz
+                );
+            }
+
+            function smoothStep(t) {
+                return t * t * (3 - 2 * t);
+            }
+
+            function lerp(a, b, t) {
+                return a + t * (b - a);
+            }
+
+            // Get height at x,z coordinates
+            function getHeight(x, z, time) {
+                // Base terrain shape
+                let value = 0;
+
+                // Add several octaves of noise
+                for (let i = 0; i < 4; i++) {
+                    const frequency = config.noiseScale * Math.pow(2, i);
+                    const amplitude = Math.pow(0.5, i);
+
+                    // Add time-based evolution to coordinates
+                    const evolvedX = x * frequency + time * config.speed * (i * 0.3 + 1);
+                    const evolvedZ = z * frequency + time * config.speed * (i * 0.2 + 0.5);
+
+                    value += noise(evolvedX, time * 0.1, evolvedZ) * amplitude;
+                }
+
+                // Normalize and scale
+                return Math.floor(value * config.amplitude);
+            }
+
+            // Fractal noise with different parameters for color variation
+            function getColorNoise(x, y, z, time) {
+                return noise(x * 0.1 + time * 0.05, y * 0.1, z * 0.1 - time * 0.03);
+            }
+
+            // Generate voxel terrain
+            function generateTerrain(time) {
+                // Reset instance count
+                instancedMesh.count = 0;
+                if (wireframe) wireframe.count = 0;
+
+                let voxelCount = 0;
+                const colorPalette = colorPalettes[config.colorMode % colorPalettes.length];
+
+                // Generate voxels
+                for (let z = 0; z < config.worldSize; z++) {
+                    for (let x = 0; x < config.worldSize; x++) {
+                        const height = getHeight(x, z, time);
+
+                        // Add top surface voxel
+                        if (height > 0) {
+                            const worldX = x * config.voxelSize;
+                            const worldZ = z * config.voxelSize;
+                            const worldY = height * config.voxelSize;
+
+                            // Position
+                            dummy.position.set(worldX, worldY, worldZ);
+                            dummy.updateMatrix();
+                            instancedMesh.setMatrixAt(voxelCount, dummy.matrix);
+
+                            if (wireframe) {
+                                wireframe.setMatrixAt(voxelCount, dummy.matrix);
+                            }
+
+                            // Color based on height and noise
+                            const normalizedHeight = height / config.amplitude;
+                            const colorIndex = Math.min(
+                                colorPalette.length - 1,
+                                Math.floor(normalizedHeight * colorPalette.length)
+                            );
+
+                            // Get base color from palette
+                            color.setHex(colorPalette[colorIndex]);
+
+                            // Add some variation
+                            const variation = getColorNoise(x, height, z, time) * 0.3 - 0.15;
+                            color.r = Math.max(0, Math.min(1, color.r + variation));
+                            color.g = Math.max(0, Math.min(1, color.g + variation));
+                            color.b = Math.max(0, Math.min(1, color.b + variation));
+
+                            instancedMesh.setColorAt(voxelCount, color);
+
+                            voxelCount++;
+
+                            // Safety check to avoid going over allocated size
+                            if (voxelCount >= maxVoxels) break;
+                        }
+                    }
+                    if (voxelCount >= maxVoxels) break;
+                }
+
+                // Update instance counts
+                instancedMesh.count = voxelCount;
+                if (wireframe) wireframe.count = voxelCount;
+
+                // Update necessary buffers
+                instancedMesh.instanceMatrix.needsUpdate = true;
+                instancedMesh.instanceColor.needsUpdate = true;  // Always update, no conditional check
+                if (wireframe && wireframe.instanceMatrix) wireframe.instanceMatrix.needsUpdate = true;
+
+                // Update stats
+                document.getElementById('voxels').textContent = `Voxels: ${voxelCount}`;
+
+                return voxelCount;
+            }
+
+            // Setup GUI
+            const gui = new dat.GUI();
+            gui.add(config, 'worldSize', 8, 64, 1).name('World Size').onChange(() => {
+                // Remove old meshes
+                scene.remove(instancedMesh);
+                if (wireframe) scene.remove(wireframe);
+
+                // Create new instanced mesh with new size
+                maxVoxels = config.worldSize * config.worldSize * config.amplitude;
+                instancedMesh = new THREE.InstancedMesh(voxelGeometry, voxelMaterial, maxVoxels);
+                instancedMesh.count = 0;
+                instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+                // Initialize the instance color buffer
+                instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(maxVoxels * 3), 3);
+                scene.add(instancedMesh);
+
+                if (config.showWireframe) {
+                    const wireframeMaterial = new THREE.MeshBasicMaterial({
+                        wireframe: true,
+                        color: 0xffffff,
+                        transparent: true,
+                        opacity: 0.1
+                    });
+                    wireframe = new THREE.InstancedMesh(voxelGeometry, wireframeMaterial, maxVoxels);
+                    wireframe.count = 0;
+                    wireframe.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+                    scene.add(wireframe);
+                }
+            });
+
+            gui.add(config, 'amplitude', 4, 32, 1).name('Terrain Height').onChange(() => {
+                // Update max voxels when amplitude changes
+                scene.remove(instancedMesh);
+                if (wireframe) scene.remove(wireframe);
+
+                maxVoxels = config.worldSize * config.worldSize * config.amplitude;
+                instancedMesh = new THREE.InstancedMesh(voxelGeometry, voxelMaterial, maxVoxels);
+                instancedMesh.count = 0;
+                instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+                // Initialize the instance color buffer
+                instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(maxVoxels * 3), 3);
+                scene.add(instancedMesh);
+
+                if (config.showWireframe) {
+                    const wireframeMaterial = new THREE.MeshBasicMaterial({
+                        wireframe: true,
+                        color: 0xffffff,
+                        transparent: true,
+                        opacity: 0.1
+                    });
+                    wireframe = new THREE.InstancedMesh(voxelGeometry, wireframeMaterial, maxVoxels);
+                    wireframe.count = 0;
+                    wireframe.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+                    scene.add(wireframe);
+                }
+            });
+
+            gui.add(config, 'noiseScale', 0.01, 0.2).name('Noise Scale');
+            gui.add(config, 'speed', 0.05, 1).name('Evolution Speed');
+            gui.add(config, 'colorMode', 0, 2, 1).name('Color Theme');
+            gui.add(config, 'showWireframe').name('Show Wireframe').onChange(value => {
+                if (value && !wireframe) {
+                    const wireframeMaterial = new THREE.MeshBasicMaterial({
+                        wireframe: true,
+                        color: 0xffffff,
+                        transparent: true,
+                        opacity: 0.1
+                    });
+                    wireframe = new THREE.InstancedMesh(voxelGeometry, wireframeMaterial, maxVoxels);
+                    wireframe.count = instancedMesh.count;
+                    scene.add(wireframe);
+                } else if (!value && wireframe) {
+                    scene.remove(wireframe);
+                    wireframe = null;
+                }
+            });
+
+            // Camera orbit controls
+            let angle = 0;
+            const radius = config.worldSize * config.voxelSize * 1.5;
+
+            // Resize handler
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            // Animation
+            let frameCount = 0;
+            let lastFpsUpdate = 0;
+
+            function animate(timestamp) {
+                requestAnimationFrame(animate);
+
+                // Update FPS counter every second
+                frameCount++;
+                if (timestamp - lastFpsUpdate > 1000) {
+                    const fps = Math.round(frameCount * 1000 / (timestamp - lastFpsUpdate));
+                    document.getElementById('fps').textContent = `FPS: ${fps}`;
+                    frameCount = 0;
+                    lastFpsUpdate = timestamp;
+                }
+
+                // Orbit camera
+                angle += 0.002;
+                camera.position.x = Math.sin(angle) * radius + (config.worldSize * config.voxelSize / 2);
+                camera.position.z = Math.cos(angle) * radius + (config.worldSize * config.voxelSize / 2);
+                camera.position.y = config.amplitude * 1.5;
+                camera.lookAt(config.worldSize * config.voxelSize / 2, 0, config.worldSize * config.voxelSize / 2);
+
+                // Generate terrain based on time
+                const time = timestamp * 0.001; // Convert to seconds
+                generateTerrain(time);
+
+                // Render
+                renderer.render(scene, camera);
+            }
+
+            // Start animation
+            animate(0);
+        }
+
+        // Start the application when page loads
+        window.onload = init;
+    </script>
+</body>
+
+</html>

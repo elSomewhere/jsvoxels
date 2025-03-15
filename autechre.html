@@ -1,0 +1,1603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vaporwave Dreamcore IDM Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simplex-noise/2.4.0/simplex-noise.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: black;
+            font-family: Arial, sans-serif;
+            color: white;
+            // Update noise blast properties
+            noiseBlastDecay = 0.03 - normalizedMood * 0.01; // Slower decay at higher mood values
+            chaosLevel = 0.3 + normalizedMood * 0.7; // More chaos at higher mood values
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            width: 300px;
+        }
+        button {
+            background-color: white;
+            color: black;
+            border: none;
+            padding: 5px 10px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #ddd;
+        }
+        button:active {
+            background-color: #aaa;
+        }
+        #info {
+            margin-top: 10px;
+            font-size: 0.9em;
+            text-align: center;
+        }
+        .slider-container {
+            margin: 15px 0;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        .slider {
+            width: 100%;
+            height: 8px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: #333;
+            outline: none;
+            border-radius: 4px;
+        }
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+        }
+        .slider::-moz-range-thumb {
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+        }
+        .value-display {
+            width: 40px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <div class="buttons">
+            <button id="playBtn">Play/Pause</button>
+            <button id="modeBtn">Change Mode</button>
+            <button id="blastBtn">Manual Noise Blast</button>
+            <button id="chaosBtn">Increase Chaos</button>
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>BPM</span>
+                <span class="value-display" id="bpmValue">120</span>
+            </div>
+            <input type="range" min="0" max="180" value="120" class="slider" id="bpmSlider">
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>Scene Mood</span>
+                <span class="value-display" id="sceneValue">50</span>
+            </div>
+            <input type="range" min="0" max="100" value="50" class="slider" id="sceneSlider">
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>Photo Blast</span>
+                <span class="value-display" id="photoBlastValue">0</span>
+            </div>
+            <input type="range" min="0" max="100" value="0" class="slider" id="photoBlastSlider">
+        </div>
+        
+        <div id="info">Nostalgic Vaporwave/Dreamcore</div>
+    </div>
+
+    <script>
+        // Initialize Three.js
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        // Create a post-processing high contrast effect
+        const contrastScene = new THREE.Scene();
+        const contrastCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        
+        // High contrast shader material
+        const contrastMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tDiffuse: { value: null },    // Will be set to rendered scene
+                contrast: { value: 1.5 },     // Contrast strength
+                brightness: { value: 0.1 },   // Brightness adjustment
+                threshold: { value: 0.3 },    // Threshold for black/white cutoff
+                exposureAmount: { value: 0.0 } // Blasted exposure effect amount
+                stencilBuffer: false,
+            vertexShader: `
+                varying vec2 vUv;
+                
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform float contrast;
+                uniform float brightness;
+                uniform float threshold;
+                uniform float exposureAmount;
+                varying vec2 vUv;
+                
+                // Function to create harsh, blown-out exposure effect
+                vec3 applyExposureBlast(vec3 color, float amount) {
+                    // Calculate luminance
+                    float luminance = dot(color, vec3(0.299, 0.587, 0.114));
+                    
+                    // Create very harsh S-curve for extreme contrast
+                    float harshCurve = pow(luminance, 0.25) * (1.0 - amount) + pow(luminance, 0.1) * amount;
+                    
+                    // Boost highlights aggressively - push anything above threshold toward white
+                    float highlightBoost = smoothstep(0.5 - amount * 0.3, 0.5 + amount * 0.1, luminance);
+                    highlightBoost = pow(highlightBoost, 0.25); // Make the curve more aggressive
+                    
+                    // Crush shadows - push anything below threshold toward black
+                    float shadowCrush = smoothstep(0.0, 0.4 - amount * 0.3, luminance);
+                    
+                    // Create halation/bloom effect around bright areas
+                    float bloomStrength = amount * 0.7;
+                    float bloomThreshold = 0.6 - amount * 0.3;
+                    float bloom = smoothstep(bloomThreshold, 1.0, luminance) * bloomStrength;
+                    
+                    // Create extreme solarization effect at high exposures
+                    float solarize = 0.0;
+                    if (amount > 0.7) {
+                        float solarizeAmount = (amount - 0.7) / 0.3; // 0 to 1 range
+                        solarize = abs(luminance - 0.5) * 2.0 * solarizeAmount;
+                    }
+                    
+                    // Create extreme tonal compression - pull midtones toward either black or white
+                    float tonalGap = 0.1 + (1.0 - amount) * 0.4; // Gap gets smaller with more exposure
+                    float compressedTone = step(0.5, luminance) * (1.0 - tonalGap) + tonalGap;
+                    
+                    // Mix in tonal compression based on exposure amount
+                    float extremeContrast = mix(luminance, compressedTone, amount * 0.8);
+                    
+                    // Combine effects based on exposure amount
+                    vec3 blasted;
+                    
+                    if (amount < 0.3) {
+                        // Mild exposure - enhanced contrast with some highlight boost
+                        blasted = mix(color, vec3(highlightBoost), amount * 3.0);
+                    } else if (amount < 0.7) {
+                        // Medium exposure - strong highlight boost with shadow crushing
+                        float mediumAmount = (amount - 0.3) / 0.4; // 0 to 1 range
+                        blasted = mix(
+                            vec3(shadowCrush * 0.1 + highlightBoost * 0.9),
+                            vec3(extremeContrast),
+                            mediumAmount
+                            }
+                    } else {
+                        // Extreme exposure - blown out with solarization
+                        float extremeAmount = (amount - 0.7) / 0.3; // 0 to 1 range
+                        blasted = mix(
+                            vec3(extremeContrast),
+                            vec3(1.0 - solarize), // Invert at extreme values
+                            extremeAmount
+                        );
+                    }
+                    
+                    // Add bloom glow
+                    blasted += vec3(bloom);
+                    
+                    // The result should somewhat preserve the original hue in highlights
+                    vec3 colorTint = normalize(color + 0.00001); // Avoid division by zero
+                    vec3 colorized = mix(blasted, blasted * colorTint, 0.2); // Slight color retention
+                    
+                    return clamp(colorized, 0.0, 1.0);
+                }
+                
+                void main() {
+                    vec4 color = texture2D(tDiffuse, vUv);
+                    
+                    // Calculate luminance (brightness)
+                    float luminance = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    
+                    // Apply contrast and brightness 
+                    float adjustedLuminance = (luminance - 0.5) * contrast + 0.5 + brightness;
+                    
+                    // Apply threshold for basic black/white contrast
+                    float strongContrast = smoothstep(threshold, threshold + 0.3, adjustedLuminance);
+                    
+                    // Create base contrasty image
+                    vec3 contrastColor = mix(vec3(0.0), vec3(1.0), strongContrast);
+                    
+                    // Blend with original for subtle color tints
+                    vec3 colorTinted = mix(contrastColor, color.rgb, 0.2);
+                    
+                    // Apply the exposure blast effect
+                    vec3 finalColor = applyExposureBlast(
+                        exposureAmount > 0.01 ? color.rgb : colorTinted, 
+                        exposureAmount
+                    );
+                    
+                    gl_FragColor = vec4(finalColor, 1.0);
+                }
+            `,
+            transparent: false,
+            depthTest: false,
+            depthWrite: false
+        });
+        
+        // Create a plane for the contrast effect
+        const contrastGeometry = new THREE.PlaneGeometry(2, 2);
+        const contrastMesh = new THREE.Mesh(contrastGeometry, contrastMaterial);
+        contrastScene.add(contrastMesh);
+        
+        // Create final post-processing shader for photo blast effect
+        const photoBlastScene = new THREE.Scene();
+        const photoBlastCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        
+        // High contrast shader material specifically for photography blast-out effect
+        const photoBlastMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tDiffuse: { value: null },    // Will be set to rendered scene
+                blastAmount: { value: 0.0 }   // Photo blast effect intensity
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform float blastAmount;
+                varying vec2 vUv;
+                
+                // Function to apply extreme photography blast-out effect
+                vec3 applyPhotoBlast(vec3 color, float intensity) {
+                    // Calculate luminance 
+                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    
+                    // Adjust parameters based on intensity
+                    float whitePoint = mix(0.80, 0.40, intensity); // Point where whites clip (lowers with intensity)
+                    float blackPoint = mix(0.20, 0.40, intensity); // Point where blacks clip (raises with intensity)
+                    float midPoint = mix(0.50, 0.48, intensity);   // Middle point shifts toward black
+                    
+                    // Apply extreme S-curve for photographer's "blast" effect
+                    float blastCurve;
+                    
+                    if (luma < midPoint) {
+                        // Shadow side - push toward black
+                        blastCurve = smoothstep(0.0, blackPoint, luma) * midPoint / blackPoint * (1.0 - intensity);
+                    } else {
+                        // Highlight side - push toward white with increasing intensity
+                        blastCurve = midPoint + smoothstep(midPoint, whitePoint, luma) * (1.0 - midPoint) / (whitePoint - midPoint);
+                        // Boost highlights even more as intensity increases
+                        blastCurve = mix(blastCurve, 1.0, smoothstep(midPoint, whitePoint, luma) * intensity);
+                    }
+                    
+                    // Even more extreme transition at high intensity levels
+                    if (intensity > 0.7) {
+                        float hardTransition = step(mix(0.4, 0.5, (intensity - 0.7) / 0.3), luma);
+                        blastCurve = mix(blastCurve, hardTransition, (intensity - 0.7) / 0.3 * 0.8);
+                    }
+                    
+                    // Add bloom/halation around bright areas
+                    float bloomStrength = intensity * 0.7;
+                    float bloomThreshold = mix(0.7, 0.5, intensity);
+                    float bloom = smoothstep(bloomThreshold, 1.0, luma) * bloomStrength;
+                    
+                    // Create base blasted image
+                    vec3 blasted = vec3(blastCurve);
+                    
+                    // Add bloom glow
+                    blasted += vec3(bloom);
+                    
+                    // Preserve a tiny bit of color information
+                    vec3 colorized = mix(blasted, blasted * normalize(color + 0.00001), 0.1 * (1.0 - intensity));
+                    
+                    // Add slight shift to colors for photographic verisimilitude
+                    float redShift = 0.02 * intensity;
+                    float blueShift = -0.01 * intensity;
+                    
+                    if (blasted.r > 0.9) {
+                        colorized.r += redShift;
+                        colorized.b += blueShift;
+                    }
+                    
+                    // Add grain/noise for photographic feel
+                    float grain = fract(sin(dot(vUv, vec2(12.9898, 78.233)) * 43758.5453) * vUv.x * vUv.y);
+                    float grainAmount = 0.03 * intensity;
+                    colorized += (grain - 0.5) * grainAmount;
+                    
+                    return clamp(colorized, 0.0, 1.0);
+                }
+                
+                void main() {
+                    vec4 texColor = texture2D(tDiffuse, vUv);
+                    
+                    // Apply photo blast effect
+                    vec3 finalColor = applyPhotoBlast(texColor.rgb, blastAmount);
+                    
+                    gl_FragColor = vec4(finalColor, 1.0);
+                }
+            `,
+            transparent: false,
+            depthTest: false,
+            depthWrite: false
+        });
+        
+        // Create plane for photo blast effect
+        const photoBlastGeometry = new THREE.PlaneGeometry(2, 2);
+        const photoBlastMesh = new THREE.Mesh(photoBlastGeometry, photoBlastMaterial);
+        photoBlastScene.add(photoBlastMesh);
+        
+        // Create an intermediate render target for the photo blast effect
+        const photoBlastTarget = new THREE.WebGLRenderTarget(
+        const renderTarget = new THREE.WebGLRenderTarget(
+            window.innerWidth, 
+            window.innerHeight, 
+            {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat,
+            }
+        );
+        // Create a render target for the scene
+            window.innerWidth, 
+            window.innerHeight, 
+            {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat,
+                stencilBuffer: false
+            }
+        );
+        const overlayScene = new THREE.Scene();
+        const overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        
+        // Create a material for the TV distortion effect with white burn-out
+        const tvDistortionMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                time: { value: 0 },
+                intensity: { value: 0 },
+                resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+                vignetteIntensity: { value: 0.4 },
+                burnThreshold: { value: 0.65 },  // Threshold for burn effect
+                burnIntensity: { value: 3.0 },   // Intensity of burn effect
+                flickerSpeed: { value: 1.5 }     // Speed of white flicker
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float time;
+                uniform float intensity;
+                uniform vec2 resolution;
+                uniform float vignetteIntensity;
+                uniform float burnThreshold;
+                uniform float burnIntensity;
+                uniform float flickerSpeed;
+                varying vec2 vUv;
+                
+                // Random function
+                float random(vec2 st) {
+                    return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+                }
+
+                // Film grain effect
+                float grain(vec2 st, float t) {
+                    return random(st + t) * 0.15;
+                }
+                
+                // VHS tracking noise
+                float trackingNoise(vec2 uv, float t) {
+                    float noise = 0.0;
+                    
+                    // Create horizontal tracking lines that move
+                    float trackPos = fract(t * 0.3);
+                    float trackWidth = 0.05 * intensity;
+                    
+                    if (abs(uv.y - trackPos) < trackWidth) {
+                        noise = (random(vec2(uv.y, t)) * 2.0 - 1.0) * intensity;
+                    }
+                    
+                    return noise;
+                }
+                
+                // White burn effect
+                vec3 whiteBurn(vec3 color, float threshold, float intensity, float t) {
+                    // Calculate luminance (brightness)
+                    float luminance = dot(color, vec3(0.299, 0.587, 0.114));
+                    
+                    // Flicker effect for the burn
+                    float flicker = 1.0 + 0.3 * sin(t * flickerSpeed * 6.28) * random(vec2(t * 0.1, luminance));
+                    
+                    // Apply threshold and create burn effect
+                    float burnMask = smoothstep(threshold, threshold + 0.2, luminance * flicker);
+                    
+                    // Boost whites exponentially and add glow
+                    vec3 burnColor = mix(color, vec3(1.0), burnMask * intensity);
+                    
+                    // Apply bloom/glow around bright areas
+                    float bloom = smoothstep(threshold - 0.3, threshold, luminance * flicker) * 0.5;
+                    burnColor += vec3(bloom);
+                    
+                    return burnColor;
+                }
+                
+                // Chromatic aberration
+                vec3 chromaticAberration(vec2 uv, float strength) {
+                    vec2 direction = normalize(vec2(0.5) - uv);
+                    float dist = length(vec2(0.5) - uv);
+                    
+                    // RGB shifts
+                    vec2 rUv = uv + direction * strength * dist * 0.03;
+                    vec2 gUv = uv;
+                    vec2 bUv = uv - direction * strength * dist * 0.03;
+                    
+                    // Just return the offset UVs as colors for the effect
+                    // Real chromatic aberration would sample a texture, but we're just creating a visual effect
+                    return vec3(
+                        rUv.x * rUv.y * 0.8, 
+                        gUv.x * gUv.y * 0.5,
+                        bUv.x * bUv.y * 0.9
+                    );
+                }
+                
+                // Vignette effect
+                float vignette(vec2 uv, float intensity) {
+                    uv = (uv - 0.5) * 0.95;
+                    return clamp(1.0 - dot(uv, uv) * intensity, 0.0, 1.0);
+                }
+                
+                void main() {
+                    vec2 uv = vUv;
+                    vec3 color = vec3(0.0);
+                    
+                    // Base nostalgic effect even when intensity is low
+                    // Slight sepia tone
+                    vec3 sepia = vec3(1.0, 0.9, 0.7);
+                    float vignetteAmount = vignette(uv, vignetteIntensity + intensity * 0.5);
+                    color += vec3(0.1 * sepia * vignetteAmount);
+                    
+                    // Add film grain
+                    float grainAmount = grain(uv * resolution / 1.5, time) * (0.2 + intensity * 0.3);
+                    color += vec3(grainAmount * 0.5);
+                    
+                    // Add white hotspots that move slowly
+                    float hotspotSize = 0.15 + 0.1 * sin(time * 0.2);
+                    vec2 hotspot1 = vec2(0.3 + 0.2 * sin(time * 0.1), 0.7 + 0.1 * cos(time * 0.13));
+                    vec2 hotspot2 = vec2(0.7 + 0.1 * cos(time * 0.15), 0.4 + 0.15 * sin(time * 0.11));
+                    
+                    float spot1 = smoothstep(hotspotSize, 0.0, length(uv - hotspot1)) * 0.3;
+                    float spot2 = smoothstep(hotspotSize * 0.7, 0.0, length(uv - hotspot2)) * 0.25;
+                    
+                    color += vec3(spot1 + spot2);
+                    
+                    // Amplify effects when intensity is higher (during noise blasts)
+                    if (intensity > 0.01) {
+                        // VHS RGB shift during blasts
+                        vec3 rgbShift = chromaticAberration(uv, intensity * 2.0) * intensity;
+                        color += rgbShift * 0.3;
+                        
+                        // Static noise
+                        float noise = random(uv * 50.0 + time) * intensity * 0.3;
+                        color += vec3(noise);
+                        
+                        // Horizontal scan lines
+                        float scanLine = step(0.5, sin(uv.y * 200.0)) * 0.1 * intensity;
+                        color += vec3(scanLine);
+                        
+                        // VHS tracking distortion
+                        float tracking = trackingNoise(uv, time) * intensity;
+                        uv.x += tracking * 0.1;
+                        
+                        // Glitch blocks
+                        float blockNoise = 0.0;
+                        if (random(vec2(time * 0.1, floor(uv.y * 20.0))) > 0.96) {
+                            blockNoise = random(vec2(floor(uv.x * 20.0), time)) * intensity;
+                            color += vec3(blockNoise);
+                        }
+                        
+                        // TV rolling effect
+                        float roll = 0.0;
+                        if (random(vec2(time * 0.5, 0.0)) > 0.98) {
+                            roll = fract(time * 0.5) * intensity;
+                            uv.y = mod(uv.y + roll, 1.0);
+                        }
+                        
+                        // Horizontal jitter
+                        if (random(vec2(time * 0.1, floor(uv.y * 20.0) * 0.1)) > 0.7) {
+                            float jitter = (random(vec2(time, uv.y)) - 0.5) * 0.05 * intensity;
+                            uv.x += jitter;
+                            // Add color banding effect for jittered areas
+                            color += vec3(0.1, 0.0, 0.2) * intensity * 0.5;
+                        }
+                        
+                        // Extra white burn during blasts
+                        float blastBurn = smoothstep(0.3, 0.8, random(vec2(floor(uv.y * 10.0), time * 0.5))) * intensity;
+                        color += vec3(blastBurn * 0.5);
+                    }
+                    
+                    // High contrast effect
+                    color = pow(color, vec3(0.7)); // Increase contrast
+                    
+                    // Apply white burn effect - boost any bright areas
+                    float currentBurnThreshold = burnThreshold - intensity * 0.2; // Lower threshold during blasts
+                    float currentBurnIntensity = burnIntensity + intensity * 2.0; // Higher intensity during blasts
+                    color = whiteBurn(color, currentBurnThreshold, currentBurnIntensity, time);
+                    
+                    gl_FragColor = vec4(color, 0.7 + intensity * 0.3); // Semi-transparent overlay
+                }
+            `,
+            transparent: true,
+            depthTest: false,
+            depthWrite: false
+        });
+        
+        // Create overlay plane
+        const overlayGeometry = new THREE.PlaneGeometry(2, 2);
+        const overlayMesh = new THREE.Mesh(overlayGeometry, tvDistortionMaterial);
+        overlayScene.add(overlayMesh);
+        
+        // Create an additional dreamy background effect
+        const dreamyBackgroundScene = new THREE.Scene();
+        const dreamyBackgroundCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        
+        // Dreamy background shader
+        const dreamyBackgroundMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                time: { value: 0 },
+                intensity: { value: 0.5 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float time;
+                uniform float intensity;
+                varying vec2 vUv;
+                
+                // Gradient noise function
+                vec2 fade(vec2 t) {return t*t*t*(t*(t*6.0-15.0)+10.0);}
+                vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
+                
+                float cnoise(vec2 P){
+                  vec4 Pi = floor(P.xyxy) + vec4(0.0, 0.0, 1.0, 1.0);
+                  vec4 Pf = fract(P.xyxy) - vec4(0.0, 0.0, 1.0, 1.0);
+                  Pi = mod(Pi, 289.0); // To avoid truncation effects in permutation
+                  vec4 ix = Pi.xzxz;
+                  vec4 iy = Pi.yyww;
+                  vec4 fx = Pf.xzxz;
+                  vec4 fy = Pf.yyww;
+                  vec4 i = permute(permute(ix) + iy);
+                  vec4 gx = 2.0 * fract(i * 0.0243902439) - 1.0; // 1/41 = 0.024...
+                  vec4 gy = abs(gx) - 0.5;
+                  vec4 tx = floor(gx + 0.5);
+                  gx = gx - tx;
+                  vec2 g00 = vec2(gx.x,gy.x);
+                  vec2 g10 = vec2(gx.y,gy.y);
+                  vec2 g01 = vec2(gx.z,gy.z);
+                  vec2 g11 = vec2(gx.w,gy.w);
+                  vec4 norm = 1.79284291400159 - 0.85373472095314 * 
+                    vec4(dot(g00, g00), dot(g01, g01), dot(g10, g10), dot(g11, g11));
+                  g00 *= norm.x;
+                  g01 *= norm.y;
+                  g10 *= norm.z;
+                  g11 *= norm.w;
+                  float n00 = dot(g00, vec2(fx.x, fy.x));
+                  float n10 = dot(g10, vec2(fx.y, fy.y));
+                  float n01 = dot(g01, vec2(fx.z, fy.z));
+                  float n11 = dot(g11, vec2(fx.w, fy.w));
+                  vec2 fade_xy = fade(Pf.xy);
+                  vec2 n_x = mix(vec2(n00, n01), vec2(n10, n11), fade_xy.x);
+                  float n_xy = mix(n_x.x, n_x.y, fade_xy.y);
+                  return 2.3 * n_xy;
+                }
+                
+                void main() {
+                    vec2 uv = vUv;
+                    
+                    // Create dreamy background
+                    float noise1 = cnoise((uv * 3.0) + time * 0.05) * 0.5 + 0.5;
+                    float noise2 = cnoise((uv * 1.5 + vec2(100.0)) - time * 0.03) * 0.5 + 0.5;
+                    
+                    // Vapourwave-inspired gradient
+                    float gradient = smoothstep(0.0, 1.0, uv.y);
+                    
+                    // Combine for dreamy effect
+                    float dreamyEffect = mix(noise1, noise2, 0.5) * gradient;
+                    
+                    // Create subtle color palette (even though we stay mostly B&W)
+                    vec3 color1 = vec3(0.8, 0.7, 0.9) * dreamyEffect; // Slight purple tint
+                    vec3 color2 = vec3(0.6, 0.8, 0.9) * (1.0 - dreamyEffect); // Slight blue tint
+                    
+                    // Mix colors and add contrast
+                    vec3 finalColor = mix(color1, color2, noise1);
+                    finalColor = pow(finalColor, vec3(1.5)) * intensity * 0.15; // Subtle effect
+                    
+                    gl_FragColor = vec4(finalColor, 0.3); // Very subtle transparent overlay
+                }
+            `,
+            transparent: true,
+            depthTest: false,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+        
+        // Create overlay plane for dreamy background
+        const dreamyBackgroundGeometry = new THREE.PlaneGeometry(2, 2);
+        const dreamyBackgroundMesh = new THREE.Mesh(dreamyBackgroundGeometry, dreamyBackgroundMaterial);
+        dreamyBackgroundScene.add(dreamyBackgroundMesh);
+
+        // Set up camera position
+        camera.position.z = 30;
+
+        // Create simplex noise generator
+        const simplex = new SimplexNoise();
+
+        // Create lights
+        const ambientLight = new THREE.AmbientLight(0xaaaacc, 0.3); // Bluish ambient light
+        scene.add(ambientLight);
+        
+        // Add bright white light for burn effect
+        const whiteLight = new THREE.PointLight(0xffffff, 2.0, 100);
+        whiteLight.position.set(0, 0, 10);
+        scene.add(whiteLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(0, 10, 10);
+        scene.add(directionalLight);
+        
+        // Add a dreamier point light that moves
+        const dreamLight = new THREE.PointLight(0x8888ff, 1.5, 50);
+        dreamLight.position.set(0, 0, 20);
+        scene.add(dreamLight);
+        
+        // Add a second contrasting light
+        const contrastLight = new THREE.PointLight(0xffaaaa, 1.0, 30);
+        contrastLight.position.set(-10, 5, 15);
+        scene.add(contrastLight);
+        
+        // Create a fog effect for depth
+        scene.fog = new THREE.FogExp2(0x000011, 0.01);
+
+        // Create a group to hold all objects
+        const mainGroup = new THREE.Group();
+        scene.add(mainGroup);
+
+        // Variables for animation
+        const maxParticles = 800;
+        const particles = [];
+        let animationMode = 0;
+        const totalModes = 4;
+        let isPlaying = true;
+        let time = 0;
+        let beatTime = 0;
+        const beatSpeed = 0.5;
+        
+        // Chaos and noise burst variables
+        let chaosLevel = 0.5;
+        let noiseBlastActive = false;
+        let noiseBlastIntensity = 0;
+        let noiseBlastDecay = 0.02;
+        
+        // 120 BPM timing variables - now configurable
+        let bpm = 120;
+        let secondsPerBeat = 60 / bpm;
+        let framesPerBeat = secondsPerBeat / 0.01; // Each frame is 0.01 time units
+        let beatCounter = 0;
+        let restructureTriggered = false;
+        
+        // Scene mood parameter (0-100) for choreographed scenes
+        let sceneMood = 50;
+        
+        // Trail effect system
+        const maxTrails = 3;
+        const trails = new THREE.Group();
+        let trailCounter = 0;
+        const trailUpdateRate = 3;
+        scene.add(trails);
+
+        // Function to update scene based on mood slider
+        function updateSceneMood(mood) {
+            // Normalize mood to 0-1 range
+            const normalizedMood = mood / 100;
+            
+            // Scene 1: Dreamy (0-0.25) - Slow, ethereal, soft
+            // Scene 2: Nostalgic (0.25-0.5) - Warm, VHS effects, film grain
+            // Scene 3: Glitchy (0.5-0.75) - Digital artifacts, high contrast
+            // Scene 4: Intense (0.75-1.0) - Fast, chaotic, high brightness
+            
+            // Calculate which scene we're in and how far into it
+            const sceneIndex = Math.floor(normalizedMood * 4);
+            const sceneProgress = (normalizedMood * 4) % 1; // 0-1 progress within scene
+            
+            // Update fog intensity based on mood
+            if (sceneIndex === 0) {
+                // Dreamy scene - heavy fog
+                scene.fog = new THREE.FogExp2(0x000022, 0.02 + sceneProgress * 0.01);
+                tvDistortionMaterial.uniforms.vignetteIntensity.value = 0.6 - sceneProgress * 0.2;
+                dreamyBackgroundMaterial.uniforms.intensity.value = 0.7 - sceneProgress * 0.2;
+            } else if (sceneIndex === 1) {
+                // Nostalgic scene - moderate fog
+                scene.fog = new THREE.FogExp2(0x110011, 0.01 + sceneProgress * 0.01);
+                tvDistortionMaterial.uniforms.vignetteIntensity.value = 0.4 + sceneProgress * 0.2;
+                dreamyBackgroundMaterial.uniforms.intensity.value = 0.5 + sceneProgress * 0.2;
+            } else if (sceneIndex === 2) {
+                // Glitchy scene - light fog
+                scene.fog = new THREE.FogExp2(0x220011, 0.005 + sceneProgress * 0.01);
+                tvDistortionMaterial.uniforms.vignetteIntensity.value = 0.3 - sceneProgress * 0.1;
+                dreamyBackgroundMaterial.uniforms.intensity.value = 0.7 + sceneProgress * 0.3;
+            } else {
+                // Intense scene - almost no fog
+                scene.fog = new THREE.FogExp2(0x330022, 0.001 + sceneProgress * 0.005);
+                tvDistortionMaterial.uniforms.vignetteIntensity.value = 0.2 + sceneProgress * 0.4;
+                dreamyBackgroundMaterial.uniforms.intensity.value = 1.0 + sceneProgress * 0.5;
+            }
+            
+            // Update white burn effect
+            tvDistortionMaterial.uniforms.burnThreshold.value = 0.8 - normalizedMood * 0.4; // Lower threshold = more burn
+            tvDistortionMaterial.uniforms.burnIntensity.value = 2.0 + normalizedMood * 4.0; // Higher intensity as mood increases
+            
+            // Update camera position
+            if (sceneIndex === 0) {
+                // Dreamy - farther away, looking slightly up
+                camera.position.z = 35 - sceneProgress * 5;
+                camera.position.y = 1 + sceneProgress * 2;
+                camera.lookAt(0, 0, 0);
+            } else if (sceneIndex === 1) {
+                // Nostalgic - standard position
+                camera.position.z = 30;
+                camera.position.y = 3 - sceneProgress * 3;
+                camera.lookAt(0, 0, 0);
+            } else if (sceneIndex === 2) {
+                // Glitchy - slight angle
+                camera.position.z = 30 - sceneProgress * 5;
+                camera.position.y = 0 - sceneProgress * 2;
+                camera.position.x = 0 + sceneProgress * 5;
+                camera.lookAt(0, 0, 0);
+            } else {
+                // Intense - closer, looking slightly down
+                camera.position.z = 25 - sceneProgress * 5;
+                camera.position.y = -2 - sceneProgress * 3;
+                camera.position.x = 5 - sceneProgress * 10;
+                camera.lookAt(0, 0, 0);
+            }
+            
+            // Update lights
+            dreamLight.color.setRGB(
+                0.5 + sceneIndex * 0.1,
+                0.5 + (sceneIndex === 0 ? 0.1 : 0) + (sceneIndex === 1 ? 0.05 : 0),
+                0.8 - (sceneIndex === 3 ? 0.4 : 0)
+            );
+            
+            whiteLight.intensity = 2.0 + normalizedMood * 3.0;
+            contrastLight.intensity = 1.0 + normalizedMood * 1.5;
+            
+            // Update slider values as scene changes
+            const contrastAmount = 1.5 + normalizedMood * 1.5; // 1.5 to 3.0 contrast
+            const blackThreshold = 0.4 - normalizedMood * 0.3; // 0.4 to 0.1 threshold
+            
+            contrastMaterial.uniforms.contrast.value = contrastAmount;
+            contrastMaterial.uniforms.threshold.value = blackThreshold;
+        }
+        const createFractalGeometry = () => {
+            // Clear previous objects
+            while(mainGroup.children.length > 0) {
+                const object = mainGroup.children[0];
+                if (object.geometry) object.geometry.dispose();
+                if (object.material) object.material.dispose();
+                mainGroup.remove(object);
+            }
+            
+            // Clear particles array
+            particles.length = 0;
+            
+            // Create new particles based on current mode
+            for (let i = 0; i < maxParticles; i++) {
+                let geometry, material, mesh;
+                
+                // Create new particles based on current mode
+                if (animationMode === 0) {
+                    // Cube based fractals
+                    geometry = new THREE.BoxGeometry(Math.random() * 0.5 + 0.2, Math.random() * 0.5 + 0.2, Math.random() * 0.5 + 0.2);
+                    material = new THREE.MeshStandardMaterial({
+                        color: 0xffffff,
+                        roughness: 0.4 + Math.random() * 0.3,
+                        metalness: 0.3 + Math.random() * 0.4,
+                        wireframe: Math.random() > 0.6,
+                        transparent: true,
+                        opacity: 0.8 + Math.random() * 0.2,
+                        emissive: new THREE.Color(0x222233),
+                        emissiveIntensity: 0.2 + Math.random() * 0.1
+                    });
+                } else if (animationMode === 1) {
+                    // Sphere based fractals
+                    geometry = new THREE.SphereGeometry(Math.random() * 0.3 + 0.1, 8, 8);
+                    material = new THREE.MeshStandardMaterial({
+                        color: 0xffffff,
+                        roughness: 0.1 + Math.random() * 0.3,
+                        metalness: 0.5 + Math.random() * 0.5,
+                        wireframe: Math.random() > 0.5,
+                        transparent: true,
+                        opacity: 0.8 + Math.random() * 0.2,
+                        emissive: new THREE.Color(0x223344),
+                        emissiveIntensity: 0.2 + Math.random() * 0.1
+                    });
+                } else if (animationMode === 2) {
+                    // Line based fractals
+                    const linePoints = [];
+                    const segments = Math.floor(Math.random() * 5) + 2;
+                    
+                    for (let j = 0; j < segments; j++) {
+                        linePoints.push(new THREE.Vector3(
+                            (Math.random() - 0.5) * 2,
+                            (Math.random() - 0.5) * 2,
+                            (Math.random() - 0.5) * 2
+                        ));
+                    }
+                    
+                    geometry = new THREE.BufferGeometry().setFromPoints(linePoints);
+                    material = new THREE.LineBasicMaterial({ 
+                        color: 0xffffff,
+                        transparent: true,
+                        opacity: 0.8 + Math.random() * 0.2
+                    });
+                    mesh = new THREE.Line(geometry, material);
+                } else {
+                    // Abstract shape fractals
+                    const type = Math.floor(Math.random() * 4);
+                    if (type === 0) {
+                        geometry = new THREE.TorusGeometry(Math.random() * 0.3 + 0.2, Math.random() * 0.1 + 0.05, 8, 12);
+                    } else if (type === 1) {
+                        geometry = new THREE.ConeGeometry(Math.random() * 0.3 + 0.1, Math.random() * 0.5 + 0.3, 8);
+                    } else if (type === 2) {
+                        geometry = new THREE.TetrahedronGeometry(Math.random() * 0.3 + 0.1);
+                    } else {
+                        geometry = new THREE.OctahedronGeometry(Math.random() * 0.3 + 0.1);
+                    }
+                    
+                    material = new THREE.MeshStandardMaterial({
+                        color: 0xffffff,
+                        roughness: 0.2 + Math.random() * 0.3,
+                        metalness: 0.5 + Math.random() * 0.5,
+                        wireframe: Math.random() > 0.5,
+                        transparent: true,
+                        opacity: 0.8 + Math.random() * 0.2,
+                        emissive: new THREE.Color(0x334455),
+                        emissiveIntensity: 0.2 + Math.random() * 0.1
+                    });
+                }
+                
+                // Create mesh if not already created (for lines)
+                if (!mesh) {
+                    mesh = new THREE.Mesh(geometry, material);
+                }
+                
+                // Initial position - spread out in a sphere
+                const radius = 15 + Math.random() * 10;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(Math.random() * 2 - 1);
+                
+                mesh.position.set(
+                    radius * Math.sin(phi) * Math.cos(theta),
+                    radius * Math.sin(phi) * Math.sin(theta),
+                    radius * Math.cos(phi)
+                );
+                
+                // Random rotation
+                mesh.rotation.set(
+                    Math.random() * Math.PI * 2,
+                    Math.random() * Math.PI * 2,
+                    Math.random() * Math.PI * 2
+                );
+                
+                // Much more varied initial scale - some very large, some very small
+                const baseScale = Math.pow(Math.random(), 2) * 3 + 0.2; // Scale ranges from 0.2 to 3.2, weighted toward smaller
+                
+                // Apply random initial scale - potentially non-uniform for distortion
+                if (Math.random() > 0.7) {
+                    // Non-uniform scale for some objects (30% chance)
+                    mesh.scale.set(
+                        baseScale * (Math.random() * 0.8 + 0.6),
+                        baseScale * (Math.random() * 0.8 + 0.6),
+                        baseScale * (Math.random() * 0.8 + 0.6)
+                    );
+                } else {
+                    // Uniform scale for most objects
+                    mesh.scale.set(baseScale, baseScale, baseScale);
+                }
+                
+                // Add to scene
+                mainGroup.add(mesh);
+                
+                    // Store particle properties for animation
+                    particles.push({
+                        mesh: mesh,
+                        initialPosition: mesh.position.clone(),
+                        initialScale: mesh.scale.clone(),
+                        speed: Math.random() * 0.02 + 0.01,
+                        rotationSpeed: {
+                            x: (Math.random() - 0.5) * 0.02,
+                            y: (Math.random() - 0.5) * 0.02,
+                            z: (Math.random() - 0.5) * 0.02
+                        },
+                        distortionFactor: Math.random() * 0.3 + 0.1, // Controls how much the object distorts during animation
+                        distortionSpeed: Math.random() * 0.2 + 0.05, // Controls frequency of distortion
+                        noiseOffset: Math.random() * 100,
+                        pulseStrength: Math.random() * 2 + 0.5
+                    });
+            }
+        };
+
+        // Create initial geometry
+        function createTrailInstance(mesh, index, total) {
+            // Create a copy of the mesh
+            let trailMesh;
+            
+            if (mesh instanceof THREE.Line) {
+                // Copy line geometry
+                const geometry = mesh.geometry.clone();
+                const material = mesh.material.clone();
+                material.opacity = 0.7 * (1.0 - (index / total));
+                material.transparent = true;
+                material.color = new THREE.Color(0xaaaaff); // Slight blue tint for trails
+                trailMesh = new THREE.Line(geometry, material);
+            } else {
+                // Copy mesh geometry
+                const geometry = mesh.geometry.clone();
+                const material = mesh.material.clone();
+                material.opacity = 0.5 * (1.0 - (index / total));
+                material.transparent = true;
+                material.wireframe = true; // Make trails wireframe
+                material.color = new THREE.Color(0xccccff); // Slight blue tint for trails
+                trailMesh = new THREE.Mesh(geometry, material);
+            }
+            
+            // Position at the source mesh
+            trailMesh.position.copy(mesh.position);
+            trailMesh.rotation.copy(mesh.rotation);
+            trailMesh.scale.copy(mesh.scale);
+            
+            // Add to the trail group
+            trails.add(trailMesh);
+            
+            return trailMesh;
+        }
+        
+        // Function to update trail positions
+        function updateTrails() {
+            // Only update trails periodically for performance
+            trailCounter++;
+            if (trailCounter < trailUpdateRate) return;
+            trailCounter = 0;
+            
+            // Clear old trails
+            while(trails.children.length > 0) {
+                const object = trails.children[0];
+                if (object.geometry) object.geometry.dispose();
+                if (object.material) object.material.dispose();
+                trails.remove(object);
+            }
+            
+            // Create new trails for a subset of particles (for performance)
+            const trailsPerParticle = Math.min(maxTrails, 3);
+            const maxTrailParticles = Math.min(particles.length, 100); // Limit number of particles with trails
+            
+            for (let i = 0; i < maxTrailParticles; i += 4) { // Only create trails for every 4th particle
+                const mesh = particles[i].mesh;
+                for (let j = 0; j < trailsPerParticle; j++) {
+                    createTrailInstance(mesh, j, trailsPerParticle);
+                }
+            }
+        }
+
+        // Function to trigger a noise blast
+        function triggerNoiseBlast() {
+            noiseBlastActive = true;
+            noiseBlastIntensity = 1.0;
+            chaosLevel = Math.min(chaosLevel + 0.3, 2.0);
+            
+            // Intensify the white burn effect during blasts
+            tvDistortionMaterial.uniforms.burnThreshold.value = 0.5 + Math.random() * 0.2; // Randomly adjust threshold
+            
+            // Random chance to completely restructure
+            restructureTriggered = Math.random() < 0.3;
+            
+            // Change the animation mode randomly sometimes
+            if (Math.random() < 0.2) {
+                animationMode = Math.floor(Math.random() * totalModes);
+            }
+            
+            // Randomize some particles
+            const numToRandomize = Math.floor(maxParticles * 0.3);
+            for (let i = 0; i < numToRandomize; i++) {
+                const index = Math.floor(Math.random() * particles.length);
+                if (particles[index]) {
+                    const mesh = particles[index].mesh;
+                    
+                    // Randomize position
+                    mesh.position.set(
+                        (Math.random() - 0.5) * 60,
+                        (Math.random() - 0.5) * 60,
+                        (Math.random() - 0.5) * 60
+                    );
+                    
+                    // Randomize rotation
+                    mesh.rotation.set(
+                        Math.random() * Math.PI * 2,
+                        Math.random() * Math.PI * 2,
+                        Math.random() * Math.PI * 2
+                    );
+                    
+                    // Randomize properties
+                    particles[index].speed = Math.random() * 0.1 + 0.02;
+                    particles[index].rotationSpeed = {
+                        x: (Math.random() - 0.5) * 0.1,
+                        y: (Math.random() - 0.5) * 0.1,
+                        z: (Math.random() - 0.5) * 0.1
+                    };
+                    particles[index].noiseOffset = Math.random() * 1000;
+                    
+                    // Add glitch effect to some materials
+                    if (Math.random() < 0.5 && mesh.material) {
+                        if (Math.random() < 0.5) {
+                            mesh.material.wireframe = !mesh.material.wireframe;
+                        }
+                        
+                        if (mesh.material.color) {
+                            // Apply slight color distortion (still in grayscale)
+                            const value = Math.random() * 0.5 + 0.5;
+                            mesh.material.color.setRGB(value, value, value);
+                        }
+                    }
+                }
+            }
+        }
+        
+        }
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (isPlaying) {
+                time += 0.01;
+                beatTime += beatSpeed * 0.01;
+                
+                // Beat pulse effect
+                const beatPulse = Math.pow(Math.sin(beatTime * Math.PI) * 0.5 + 0.5, 3);
+                
+                // 120 BPM noise blast timing
+                beatCounter++;
+                if (beatCounter >= framesPerBeat) {
+                    beatCounter = 0;
+                    triggerNoiseBlast();
+                }
+                
+                // Update noise blast
+                if (noiseBlastActive) {
+                    noiseBlastIntensity -= noiseBlastDecay;
+                    
+                    // Update TV distortion effect intensity
+                    tvDistortionMaterial.uniforms.intensity.value = noiseBlastIntensity;
+                    tvDistortionMaterial.uniforms.time.value = time;
+                    
+                    // White burn effect gets more intense during blasts
+                    const burnIntensityDuringBlast = 3.0 + noiseBlastIntensity * 4.0;
+                    tvDistortionMaterial.uniforms.burnIntensity.value = burnIntensityDuringBlast;
+                    tvDistortionMaterial.uniforms.flickerSpeed.value = 1.5 + noiseBlastIntensity * 3.0;
+                    
+                    if (noiseBlastIntensity <= 0) {
+                        noiseBlastIntensity = 0;
+                        noiseBlastActive = false;
+                        
+                        // If restructure was triggered, rebuild everything
+                        if (restructureTriggered) {
+                            createFractalGeometry();
+                            restructureTriggered = false;
+                        }
+                    }
+                }
+                
+                // Update dreamy background
+                dreamyBackgroundMaterial.uniforms.time.value = time;
+                
+                // Apply the scene mood effects
+                updateSceneMood(sceneMood);
+                
+                // Update moving lights
+                dreamLight.position.x = Math.sin(time * 0.2) * 15;
+                dreamLight.position.y = Math.cos(time * 0.3) * 10;
+                dreamLight.intensity = 1.5 + beatPulse * 0.5 + noiseBlastIntensity * 1.0;
+                
+                contrastLight.position.x = Math.cos(time * 0.25) * 15;
+                contrastLight.position.z = 15 + Math.sin(time * 0.2) * 5;
+                contrastLight.intensity = 1.0 + noiseBlastIntensity * 0.5;
+                
+                // Update white light for burn effect
+                whiteLight.position.x = Math.sin(time * 0.15) * 10;
+                whiteLight.position.y = Math.cos(time * 0.12) * 8;
+                whiteLight.intensity = 2.0 + beatPulse * 1.0 + noiseBlastIntensity * 3.0;
+                
+                // Update trails
+                updateTrails();
+                
+                // Update each particle
+                particles.forEach((particle, i) => {
+                    const mesh = particle.mesh;
+                    
+                    // Apply noise blast effect to particle
+                    const noiseBlastEffect = noiseBlastActive ? noiseBlastIntensity : 0;
+                    
+                    // Apply chaos level
+                    const currentChaos = chaosLevel + noiseBlastEffect;
+                    
+                    // Base movement pattern with chaos applied
+                    if (animationMode === 0) {
+                        // Chaotic orbital movement
+                        const angle = time * particle.speed * (1 + currentChaos) + particle.noiseOffset;
+                        const radius = 15 + Math.sin(time * 0.2 + i * 0.05 * currentChaos) * (5 + currentChaos * 10);
+                        
+                        // Apply surreal transformations
+                        const morphFactor = Math.sin(time * 0.1 + i * 0.01) * currentChaos;
+                        const twistFactor = Math.cos(time * 0.3) * currentChaos * 5;
+                        
+                        mesh.position.x = Math.cos(angle + morphFactor) * radius * (1 + Math.sin(time * 0.1 * (1 + currentChaos)) * 0.2);
+                        mesh.position.y = Math.sin(angle + twistFactor) * radius * (1 + Math.cos(time * 0.15 * (1 + currentChaos)) * 0.2);
+                        mesh.position.z = Math.sin(time * 0.2 * (1 + currentChaos) + i * 0.01) * (10 + currentChaos * 15);
+                        
+                        // Add perlin noise displacement during noise blast
+                        if (noiseBlastActive && i % 3 === 0) {
+                            const noiseX = simplex.noise3D(time, i * 0.1, 0) * 20 * noiseBlastIntensity;
+                            const noiseY = simplex.noise3D(time, 0, i * 0.1) * 20 * noiseBlastIntensity;
+                            const noiseZ = simplex.noise3D(0, time, i * 0.1) * 20 * noiseBlastIntensity;
+                            
+                            mesh.position.x += noiseX;
+                            mesh.position.y += noiseY;
+                            mesh.position.z += noiseZ;
+                        }
+                    } else if (animationMode === 1) {
+                        // Surreal fractal spiral
+                        const t = time * particle.speed * (1 + currentChaos) + i * 0.01;
+                        const a = 5 + currentChaos * 3; // spiral width
+                        const b = 1 + currentChaos * 2; // spiral height
+                        const k = i * 0.0015 * (1 + currentChaos); // spiral tightness
+                        
+                        // Surreal transformation
+                        const warpFactor = Math.sin(time * 0.5) * currentChaos * 2;
+                        
+                        mesh.position.x = a * Math.sin(t + warpFactor) * Math.exp(k * t) * Math.cos(t);
+                        mesh.position.y = b * Math.exp(k * t) * Math.sin(t * (1 + warpFactor));
+                        mesh.position.z = a * Math.cos(t - warpFactor) * Math.exp(k * t);
+                        
+                        // Add fractal self-similarity during noise blast
+                        if (noiseBlastActive) {
+                            const recursiveX = mesh.position.x * 0.2 * Math.sin(t * 5) * noiseBlastIntensity;
+                            const recursiveY = mesh.position.y * 0.2 * Math.cos(t * 5) * noiseBlastIntensity;
+                            const recursiveZ = mesh.position.z * 0.2 * Math.sin(t * 3) * noiseBlastIntensity;
+                            
+                            mesh.position.x += recursiveX;
+                            mesh.position.y += recursiveY;
+                            mesh.position.z += recursiveZ;
+                        }
+                    } else if (animationMode === 2) {
+                        // Chaotic noise field
+                        const noiseScale = 0.1 * (1 + currentChaos * 0.5);
+                        const t = time * 0.2 * (1 + currentChaos);
+                        
+                        // Multiple layers of noise
+                        const nx1 = simplex.noise3D(
+                            particle.initialPosition.x * noiseScale, 
+                            particle.initialPosition.y * noiseScale,
+                            t
+                        ) * 15;
+                        
+                        const ny1 = simplex.noise3D(
+                            particle.initialPosition.y * noiseScale, 
+                            particle.initialPosition.z * noiseScale,
+                            t + 100
+                        ) * 15;
+                        
+                        const nz1 = simplex.noise3D(
+                            particle.initialPosition.z * noiseScale, 
+                            particle.initialPosition.x * noiseScale,
+                            t + 200
+                        ) * 15;
+                        
+                        // Second layer of noise for surreal effect
+                        const nx2 = simplex.noise3D(
+                            nx1 * 0.1, 
+                            t * 0.5,
+                            ny1 * 0.1
+                        ) * 10 * currentChaos;
+                        
+                        const ny2 = simplex.noise3D(
+                            ny1 * 0.1, 
+                            nz1 * 0.1,
+                            t * 0.3
+                        ) * 10 * currentChaos;
+                        
+                        const nz2 = simplex.noise3D(
+                            nz1 * 0.1, 
+                            nx1 * 0.1,
+                            t * 0.7
+                        ) * 10 * currentChaos;
+                        
+                        mesh.position.set(
+                            nx1 + nx2, 
+                            ny1 + ny2, 
+                            nz1 + nz2
+                        );
+                        
+                        // Add turbulence during noise blast
+                        if (noiseBlastActive) {
+                            const turbAmp = 25 * noiseBlastIntensity;
+                            const turbFreq = time * 10;
+                            mesh.position.x += Math.sin(turbFreq + i * 0.1) * turbAmp;
+                            mesh.position.y += Math.cos(turbFreq + i * 0.2) * turbAmp;
+                            mesh.position.z += Math.sin(turbFreq * 0.7 + i * 0.3) * turbAmp;
+                        }
+                    } else {
+                        // Surreal chaotic attractor
+                        const sigma = 10 * (1 + currentChaos * 0.5);
+                        const rho = 28 * (1 + currentChaos * 0.3);
+                        const beta = 8/3 * (1 + currentChaos * 0.2);
+                        const dt = 0.005 * (1 + currentChaos);
+                        
+                        // Start with current position
+                        let x = mesh.position.x;
+                        let y = mesh.position.y;
+                        let z = mesh.position.z;
+                        
+                        // Apply chaotic attractor equations with varying parameters
+                        const chaosVariation = Math.sin(time * 0.1 + i * 0.01) * currentChaos;
+                        
+                        // Modified attractors with surreal variations
+                        const dx = sigma * (y - x) * dt + chaosVariation * y * dt;
+                        const dy = (x * (rho - z) - y) * dt + chaosVariation * x * dt;
+                        const dz = (x * y - beta * z) * dt + chaosVariation * (x + y) * dt;
+                        
+                        // Update position with larger bounds during chaos
+                        const bounds = 30 * (1 + currentChaos * 0.5);
+                        mesh.position.x = Math.max(-bounds, Math.min(bounds, x + dx));
+                        mesh.position.y = Math.max(-bounds, Math.min(bounds, y + dy));
+                        mesh.position.z = Math.max(-bounds, Math.min(bounds, z + dz));
+                        
+                        // During noise blast, apply strange attractor shifts
+                        if (noiseBlastActive) {
+                            // Alternate between different strange attractors during blast
+                            const blastPhase = Math.floor(time * 5) % 3;
+                            const blastFactor = noiseBlastIntensity * 5;
+                            
+                            if (blastPhase === 0) {
+                                // Aizawa attractor-inspired
+                                mesh.position.x += (z - 0.7) * x - 3.5 * y * dt * blastFactor;
+                                mesh.position.y += 3.5 * x + (z - 0.7) * y * dt * blastFactor;
+                                mesh.position.z += 0.6 + 0.95 * z - z * z * z / 3 - (x * x + y * y) * (1 + 0.25 * z) + 0.1 * z * x * x * x * dt * blastFactor;
+                            } else if (blastPhase === 1) {
+                                // Dadras attractor-inspired
+                                mesh.position.x += y - 3 * x + 2.7 * y * z * dt * blastFactor;
+                                mesh.position.y += 1 - 0.3 * x * x - 0.1 * y + 0.1 * z * dt * blastFactor;
+                                mesh.position.z += 0.2 * z + 0.1 * x * y * dt * blastFactor;
+                            } else {
+                                // Sprott attractor-inspired
+                                mesh.position.x += y + 2 * x * y + x * z * dt * blastFactor;
+                                mesh.position.y += 1 - x * x + y * z * dt * blastFactor;
+                                mesh.position.z += x - x * x - y * y * dt * blastFactor;
+                            }
+                        }
+                        
+                        // Apply reset towards center if too far out, but less during noise blast
+                        const distSq = mesh.position.x * mesh.position.x + 
+                                      mesh.position.y * mesh.position.y + 
+                                      mesh.position.z * mesh.position.z;
+                        
+                        const resetThreshold = 900 * (1 + currentChaos * 2); // Expanded threshold during chaos
+                        if (distSq > resetThreshold) {
+                            const resetFactor = noiseBlastActive ? 0.995 : 0.99;
+                            mesh.position.x *= resetFactor;
+                            mesh.position.y *= resetFactor;
+                            mesh.position.z *= resetFactor;
+                        }
+                    }
+                    
+                    // Apply beat pulse with chaos
+                    const pulseFactor = (0.05 + currentChaos * 0.1) * particle.pulseStrength;
+                    mesh.position.x += mesh.position.x * beatPulse * pulseFactor;
+                    mesh.position.y += mesh.position.y * beatPulse * pulseFactor;
+                    mesh.position.z += mesh.position.z * beatPulse * pulseFactor;
+                    
+                    // Add sudden directional shifts during noise blast
+                    if (noiseBlastActive && Math.random() < 0.05 * noiseBlastIntensity) {
+                        const shiftDirection = Math.floor(Math.random() * 3);
+                        const shiftMagnitude = 2 + Math.random() * 8 * noiseBlastIntensity;
+                        
+                        if (shiftDirection === 0) {
+                            mesh.position.x += (Math.random() - 0.5) * shiftMagnitude;
+                        } else if (shiftDirection === 1) {
+                            mesh.position.y += (Math.random() - 0.5) * shiftMagnitude;
+                        } else {
+                            mesh.position.z += (Math.random() - 0.5) * shiftMagnitude;
+                        }
+                    }
+                    
+                    // Chaotic rotation
+                    const rotSpeed = {
+                        x: particle.rotationSpeed.x * (1 + currentChaos),
+                        y: particle.rotationSpeed.y * (1 + currentChaos),
+                        z: particle.rotationSpeed.z * (1 + currentChaos)
+                    };
+                    
+                    // Add sudden rotation bursts during noise blast
+                    if (noiseBlastActive && Math.random() < 0.1 * noiseBlastIntensity) {
+                        rotSpeed.x += (Math.random() - 0.5) * 0.2 * noiseBlastIntensity;
+                        rotSpeed.y += (Math.random() - 0.5) * 0.2 * noiseBlastIntensity;
+                        rotSpeed.z += (Math.random() - 0.5) * 0.2 * noiseBlastIntensity;
+                    }
+                    
+                    mesh.rotation.x += rotSpeed.x;
+                    mesh.rotation.y += rotSpeed.y;
+                    mesh.rotation.z += rotSpeed.z;
+                    
+                    // Scale with beat and chaos
+                    let scale = 1 + beatPulse * (0.3 + currentChaos * 0.5) * particle.pulseStrength;
+                    
+                    // Add scale fluctuations during noise blast
+                    if (noiseBlastActive) {
+                        const scaleNoise = simplex.noise2D(time * 10, i * 0.1) * noiseBlastIntensity;
+                        scale *= (1 + scaleNoise * 0.5);
+                        
+                        // Random chance for extreme scaling
+                        if (Math.random() < 0.01 * noiseBlastIntensity) {
+                            scale *= Math.random() * 2 + 0.5;
+                        }
+                    }
+                    
+                    // Apply different scales to each dimension for surreal effect
+                    if (currentChaos > 1.0) {
+                        const scaleX = scale * (1 + Math.sin(time * 2 + i * 0.1) * 0.3 * (currentChaos - 1));
+                        const scaleY = scale * (1 + Math.cos(time * 2.5 + i * 0.2) * 0.3 * (currentChaos - 1));
+                        const scaleZ = scale * (1 + Math.sin(time * 1.7 + i * 0.3) * 0.3 * (currentChaos - 1));
+                        mesh.scale.set(scaleX, scaleY, scaleZ);
+                    } else {
+                        mesh.scale.set(scale, scale, scale);
+                    }
+                    
+                    // Apply dynamic distortion to the geometry
+                    const initialScale = particle.initialScale;
+                    const distortionAmount = particle.distortionFactor * (1 + currentChaos);
+                    const distortionFreq = particle.distortionSpeed * (1 + currentChaos * 0.5);
+                    
+                    // Create pulsing/breathing distortion effect
+                    const distortX = 1 + Math.sin(time * distortionFreq) * distortionAmount;
+                    const distortY = 1 + Math.cos(time * distortionFreq * 1.3) * distortionAmount;
+                    const distortZ = 1 + Math.sin(time * distortionFreq * 0.7 + Math.PI/3) * distortionAmount;
+                    
+                    // Apply distortion relative to object's initial scale
+                    mesh.scale.x *= distortX;
+                    mesh.scale.y *= distortY;
+                    mesh.scale.z *= distortZ;
+                    
+                    // Apply extra random distortion during noise blast
+                    if (noiseBlastActive && Math.random() < 0.05 * noiseBlastIntensity) {
+                        const blastDistort = 1 + (Math.random() - 0.5) * noiseBlastIntensity * 2;
+                        const blastAxis = Math.floor(Math.random() * 3); // 0, 1, or 2
+                        
+                        if (blastAxis === 0) mesh.scale.x *= blastDistort;
+                        else if (blastAxis === 1) mesh.scale.y *= blastDistort;
+                        else mesh.scale.z *= blastDistort;
+                    }
+                    
+                    // Material effects for surreal appearance
+                    if (mesh.material) {
+                        // Opacity changes with beat and noise blast
+                        if (mesh.material.opacity !== undefined) {
+                            let opacity = 0.7 + beatPulse * 0.3;
+                            
+                            // Add flickering during noise blast
+                            if (noiseBlastActive && Math.random() < 0.2) {
+                                opacity = Math.random() * 0.7 + 0.3;
+                            }
+                            
+                            mesh.material.opacity = opacity;
+                        }
+                        
+                        // Random wireframe toggling during noise blast
+                        if (noiseBlastActive && Math.random() < 0.01 * noiseBlastIntensity) {
+                            mesh.material.wireframe = !mesh.material.wireframe;
+                        }
+                        
+                        // Glitch effect - distort some materials during noise blast
+                        if (noiseBlastActive && mesh.material.color && Math.random() < 0.05 * noiseBlastIntensity) {
+                            const glitchValue = Math.random();
+                            mesh.material.color.setRGB(glitchValue, glitchValue, glitchValue);
+                        }
+                    }
+                });
+                
+                // Apply chaos to global rotation
+                const globalRotSpeed = 0.001 * (1 + chaosLevel * 0.5);
+                mainGroup.rotation.y += globalRotSpeed;
+                mainGroup.rotation.x = Math.sin(time * 0.1 * (1 + chaosLevel * 0.2)) * (0.2 + chaosLevel * 0.1);
+                
+                // Add z-rotation during noise blast
+                if (noiseBlastActive) {
+                    mainGroup.rotation.z = Math.sin(time * noiseBlastIntensity * 2) * noiseBlastIntensity * 0.2;
+                    
+                    // Camera shake during blast
+                    camera.position.x = Math.sin(time * 20) * noiseBlastIntensity * 3;
+                    camera.position.y = Math.cos(time * 15) * noiseBlastIntensity * 2;
+                } else {
+                    mainGroup.rotation.z *= 0.95; // Gradually reset z rotation
+                    camera.position.x *= 0.9; // Reset camera position
+                    camera.position.y *= 0.9;
+                }
+                
+                // Slowly decrease chaos level over time
+                if (chaosLevel > 0.5 && !noiseBlastActive) {
+                    chaosLevel = Math.max(0.5, chaosLevel - 0.001);
+                }
+            }
+            
+            // First render the scene to the render target
+            renderer.setRenderTarget(renderTarget);
+            
+            // Render background first
+            renderer.render(dreamyBackgroundScene, dreamyBackgroundCamera);
+            
+            // Then render main scene on top
+            renderer.autoClear = false;
+            renderer.render(scene, camera);
+            
+            // Finally render the TV distortion overlay if active
+            if (noiseBlastActive || true) { // Always show some subtle effect
+                renderer.render(overlayScene, overlayCamera);
+            }
+            
+            // Render the contrast effect to an intermediate target
+            renderer.setRenderTarget(photoBlastTarget);
+            renderer.autoClear = true;
+            
+            // Set the rendered result as input to the contrast shader
+            contrastMaterial.uniforms.tDiffuse.value = renderTarget.texture;
+            
+            // Render contrast effect
+            renderer.render(contrastScene, contrastCamera);
+            
+            // Final pass - render to screen with photo blast effect
+            renderer.setRenderTarget(null);
+            
+            // Set the contrast result as input to the photo blast shader
+            photoBlastMaterial.uniforms.tDiffuse.value = photoBlastTarget.texture;
+            
+            // Render final photo blast effect to screen
+            renderer.render(photoBlastScene, photoBlastCamera);
+        }
+
+        // Initial creation
+        createFractalGeometry();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            tvDistortionMaterial.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+            
+            // Update render target sizes
+            renderTarget.setSize(window.innerWidth, window.innerHeight);
+            photoBlastTarget.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Controls - fixed and improved
+        document.getElementById('playBtn').addEventListener('click', function() {
+            isPlaying = !isPlaying;
+            this.textContent = isPlaying ? "Pause" : "Play";
+        });
+
+        document.getElementById('modeBtn').addEventListener('click', function() {
+            animationMode = (animationMode + 1) % totalModes;
+            createFractalGeometry();
+        });
+        
+        document.getElementById('blastBtn').addEventListener('click', function() {
+            triggerNoiseBlast();
+        });
+        
+        document.getElementById('chaosBtn').addEventListener('click', function() {
+            chaosLevel = Math.min(chaosLevel + 0.2, 2.0);
+        });
+        
+        // BPM slider
+        const bpmSlider = document.getElementById('bpmSlider');
+        const bpmValue = document.getElementById('bpmValue');
+        
+        bpmSlider.addEventListener('input', function() {
+            bpm = parseInt(this.value);
+            bpmValue.textContent = bpm;
+            
+            // Update timing variables
+            if (bpm === 0) {
+                // Special case: disable automatic noise blasts at 0 BPM
+                framesPerBeat = Infinity; // Will never trigger automatically
+            } else {
+                secondsPerBeat = 60 / bpm;
+                framesPerBeat = secondsPerBeat / 0.01;
+            }
+        });
+        
+        // Scene parameter slider
+        const sceneSlider = document.getElementById('sceneSlider');
+        const sceneValue = document.getElementById('sceneValue');
+        
+        sceneSlider.addEventListener('input', function() {
+            sceneMood = parseInt(this.value);
+            sceneValue.textContent = sceneMood;
+            
+            // Scene settings will be applied in the animation loop
+        });
+        
+        );
+        const exposureSlider = document.getElementById('exposureSlider');
+        const exposureValue = document.getElementById('exposureValue');
+        
+        exposureSlider.addEventListener('input', function() {
+            const exposureLevel = parseInt(this.value) / 100; // 0 to 1 range
+            exposureValue.textContent = this.value;
+            
+            // Update shader uniform directly
+            contrastMaterial.uniforms.exposureAmount.value = exposureLevel;
+        });
+
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>
