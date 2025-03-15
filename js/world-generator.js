@@ -10,16 +10,89 @@ export class WorldGenerator {
 
     // Generate terrain for a chunk
     generateChunk(chunkX, chunkY, chunkZ) {
-        const chunk = new Chunk();
+        console.log(`WorldGenerator.generateChunk called with: ${chunkX}, ${chunkY}, ${chunkZ}`);
+        
+        try {
+            // Create the chunk
+            const chunk = new Chunk();
+            
+            // Verify the chunk was created properly
+            if (!chunk || !chunk.rootNode) {
+                console.error("Failed to create valid chunk - rootNode is missing");
+                // Create a fallback empty chunk
+                const fallbackChunk = new Chunk();
+                // Ensure rootNode is explicitly created if missing
+                if (!fallbackChunk.rootNode) {
+                    try {
+                        fallbackChunk.rootNode = new OctreeNode(0, 0, 0, CHUNK_SIZE);
+                    } catch (e) {
+                        console.error("Failed to create fallback rootNode:", e);
+                    }
+                }
+                return fallbackChunk;
+            }
+            
+            // Store chunk coordinates
+            chunk.x = chunkX;
+            chunk.y = chunkY;
+            chunk.z = chunkZ;
+            
+            // Calculate world position of chunk
+            const worldX = chunkX * CHUNK_SIZE;
+            const worldY = chunkY * CHUNK_SIZE;
+            const worldZ = chunkZ * CHUNK_SIZE;
 
-        // Calculate world position of chunk
-        const worldX = chunkX * CHUNK_SIZE;
-        const worldY = chunkY * CHUNK_SIZE;
-        const worldZ = chunkZ * CHUNK_SIZE;
-
-        // Generate terrain
-        for (let x = 0; x < CHUNK_SIZE; x++) {
-            for (let z = 0; z < CHUNK_SIZE; z++) {
+            // Generate terrain
+            let nonAirVoxels = 0;
+            let voxelTypes = {};
+            
+            // Progressive generation to avoid overwhelming the system
+            // Rather than trying to generate the entire chunk at once, do it in sections
+            const sectionsPerDimension = 4; // Split into 4x4x4 sections (64 total)
+            const sectionSize = CHUNK_SIZE / sectionsPerDimension;
+            
+            for (let sx = 0; sx < sectionsPerDimension; sx++) {
+                for (let sy = 0; sy < sectionsPerDimension; sy++) {
+                    for (let sz = 0; sz < sectionsPerDimension; sz++) {
+                        // Generate one section at a time
+                        try {
+                            this.generateChunkSection(
+                                chunk, 
+                                worldX, worldY, worldZ,
+                                sx * sectionSize, sy * sectionSize, sz * sectionSize,
+                                sectionSize,
+                                nonAirVoxels, voxelTypes
+                            );
+                        } catch (sectionError) {
+                            console.error(`Error generating section (${sx},${sy},${sz}):`, sectionError);
+                        }
+                    }
+                }
+            }
+            
+            console.log(`Chunk generated with ${nonAirVoxels} non-air voxels:`, voxelTypes);
+            return chunk;
+        } catch (error) {
+            console.error(`Error generating chunk at ${chunkX}, ${chunkY}, ${chunkZ}:`, error);
+            
+            // Return an empty chunk as fallback
+            const emptyChunk = new Chunk();
+            emptyChunk.x = chunkX;
+            emptyChunk.y = chunkY;
+            emptyChunk.z = chunkZ;
+            return emptyChunk;
+        }
+    }
+    
+    // Generate a section of the chunk to avoid overwhelming the system
+    generateChunkSection(chunk, worldX, worldY, worldZ, startX, startY, startZ, sectionSize, nonAirVoxels, voxelTypes) {
+        // End coordinates (exclusive)
+        const endX = Math.min(startX + sectionSize, CHUNK_SIZE);
+        const endY = Math.min(startY + sectionSize, CHUNK_SIZE);
+        const endZ = Math.min(startZ + sectionSize, CHUNK_SIZE);
+        
+        for (let x = startX; x < endX; x++) {
+            for (let z = startZ; z < endZ; z++) {
                 // World coordinates
                 const wx = worldX + x;
                 const wz = worldZ + z;
@@ -28,40 +101,55 @@ export class WorldGenerator {
                 const baseHeight = this.getHeight(wx, wz);
 
                 // Fill voxels up to the height
-                for (let y = 0; y < CHUNK_SIZE; y++) {
-                    const wy = worldY + y;
+                for (let y = startY; y < endY; y++) {
+                    try {
+                        const wy = worldY + y;
 
-                    // Determine voxel type based on height
-                    let voxelType = VoxelType.AIR;
+                        // Determine voxel type based on height
+                        let voxelType = VoxelType.AIR; // Default to air
 
-                    if (wy < baseHeight) {
-                        // Below surface
-                        if (wy < 1) {
-                            voxelType = VoxelType.BEDROCK;
-                        } else if (wy < baseHeight - 5) {
-                            voxelType = VoxelType.STONE;
-                        } else if (wy < baseHeight - 1) {
-                            voxelType = VoxelType.DIRT;
-                        } else {
-                            voxelType = VoxelType.GRASS;
+                        if (wy < baseHeight) {
+                            // Below surface
+                            if (wy < 1) {
+                                voxelType = VoxelType.BEDROCK;
+                            } else if (wy < baseHeight - 5) {
+                                voxelType = VoxelType.STONE;
+                            } else if (wy < baseHeight - 1) {
+                                voxelType = VoxelType.DIRT;
+                            } else {
+                                voxelType = VoxelType.GRASS;
+                            }
+
+                            // Cave generation
+                            if (voxelType !== VoxelType.BEDROCK && this.getCaveNoise(wx, wy, wz) > 0.7) {
+                                voxelType = VoxelType.AIR;
+                            }
+                        } else if (wy < 8) {
+                            // Water
+                            voxelType = VoxelType.WATER;
                         }
 
-                        // Cave generation
-                        if (voxelType !== VoxelType.BEDROCK && this.getCaveNoise(wx, wy, wz) > 0.7) {
-                            voxelType = VoxelType.AIR;
+                        // Only set non-air voxels to reduce octree complexity
+                        if (voxelType !== VoxelType.AIR) {
+                            // Set voxel in chunk safely
+                            if (chunk && chunk.rootNode) {
+                                try {
+                                    chunk.setVoxel(x, y, z, voxelType);
+                                    
+                                    // Count non-air voxels for debugging
+                                    nonAirVoxels++;
+                                    voxelTypes[voxelType] = (voxelTypes[voxelType] || 0) + 1;
+                                } catch (setError) {
+                                    console.error(`Error setting voxel at (${x},${y},${z}):`, setError);
+                                }
+                            }
                         }
-                    } else if (wy < 8) {
-                        // Water
-                        voxelType = VoxelType.WATER;
+                    } catch (error) {
+                        console.error(`Error processing voxel at (${x},${y},${z}):`, error);
                     }
-
-                    // Set voxel in chunk
-                    chunk.setVoxel(x, y, z, voxelType);
                 }
             }
         }
-
-        return chunk;
     }
 
     // Height map generation

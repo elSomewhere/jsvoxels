@@ -66,6 +66,18 @@ export const mat4 = {
         y1 = z2 * x0 - z0 * x2;
         y2 = z0 * x1 - z1 * x0;
 
+        len = Math.sqrt(y0 * y0 + y1 * y1 + y2 * y2);
+        if (!len) {
+            y0 = 0;
+            y1 = 0;
+            y2 = 0;
+        } else {
+            len = 1 / len;
+            y0 *= len;
+            y1 *= len;
+            y2 *= len;
+        }
+
         out[0] = x0;
         out[1] = y0;
         out[2] = z0;
@@ -317,6 +329,77 @@ export const mat4 = {
         }
 
         return true;
+    },
+
+    // Extract frustum planes from a projection-view matrix
+    frustumFromMatrix(projViewMatrix) {
+        const planes = [];
+        
+        // Left plane
+        planes.push([
+            projViewMatrix[3] + projViewMatrix[0],
+            projViewMatrix[7] + projViewMatrix[4],
+            projViewMatrix[11] + projViewMatrix[8],
+            projViewMatrix[15] + projViewMatrix[12]
+        ]);
+        
+        // Right plane
+        planes.push([
+            projViewMatrix[3] - projViewMatrix[0],
+            projViewMatrix[7] - projViewMatrix[4],
+            projViewMatrix[11] - projViewMatrix[8],
+            projViewMatrix[15] - projViewMatrix[12]
+        ]);
+        
+        // Bottom plane
+        planes.push([
+            projViewMatrix[3] + projViewMatrix[1],
+            projViewMatrix[7] + projViewMatrix[5],
+            projViewMatrix[11] + projViewMatrix[9],
+            projViewMatrix[15] + projViewMatrix[13]
+        ]);
+        
+        // Top plane
+        planes.push([
+            projViewMatrix[3] - projViewMatrix[1],
+            projViewMatrix[7] - projViewMatrix[5],
+            projViewMatrix[11] - projViewMatrix[9],
+            projViewMatrix[15] - projViewMatrix[13]
+        ]);
+        
+        // Near plane
+        planes.push([
+            projViewMatrix[3] + projViewMatrix[2],
+            projViewMatrix[7] + projViewMatrix[6],
+            projViewMatrix[11] + projViewMatrix[10],
+            projViewMatrix[15] + projViewMatrix[14]
+        ]);
+        
+        // Far plane
+        planes.push([
+            projViewMatrix[3] - projViewMatrix[2],
+            projViewMatrix[7] - projViewMatrix[6],
+            projViewMatrix[11] - projViewMatrix[10],
+            projViewMatrix[15] - projViewMatrix[14]
+        ]);
+        
+        // Normalize the planes with safer normalization (avoid division by zero)
+        for (let i = 0; i < 6; i++) {
+            const length = Math.sqrt(
+                planes[i][0] * planes[i][0] +
+                planes[i][1] * planes[i][1] +
+                planes[i][2] * planes[i][2]
+            );
+            
+            if (length > 0.00001) { // Avoid division by zero or very small numbers
+                planes[i][0] /= length;
+                planes[i][1] /= length;
+                planes[i][2] /= length;
+                planes[i][3] /= length;
+            }
+        }
+        
+        return planes;
     }
 };
 
