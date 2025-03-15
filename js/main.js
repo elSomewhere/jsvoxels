@@ -211,25 +211,6 @@ class VoxelEngine {
             
             // Update octree stats (do this less frequently to save CPU)
             this.updateDebugStats();
-            
-            // Debug output for chunk and mesh stats
-            console.log("=== DETAILED CHUNK DEBUG ===");
-            console.log(`Total Chunks: ${this.chunkManager.chunks.size}`);
-            console.log(`Mesh Count: ${this.chunkManager.meshes.size}`);
-            console.log(`Dirty Chunks: ${this.chunkManager.dirtyChunks.size}`);
-            console.log(`Camera Position: ${this.camera.position.map(v => Math.floor(v)).join(',')}`);
-            
-            // Output the first few chunks to check if they have proper data
-            let i = 0;
-            for (const [key, chunk] of this.chunkManager.chunks.entries()) {
-                if (i++ < 3) { // Only show first 3 chunks
-                    console.log(`Chunk ${key}: `, {
-                        hasMesh: this.chunkManager.meshes.has(key),
-                        isDirty: this.chunkManager.dirtyChunks.has(key),
-                        position: key.split(',').map(Number)
-                    });
-                }
-            }
         }
         
         // Store previous position for movement detection
@@ -266,26 +247,30 @@ class VoxelEngine {
             rotationDelta[2] * rotationDelta[2]
         );
         
-        // Update chunks based on player position - always update if forceAllVisible is true
+        // Update chunks based on player position
         const position = this.camera.position;
         const MOVEMENT_THRESHOLD = 0.1;  // Only update chunks if moved significantly
         const ROTATION_THRESHOLD = 0.01; // Only update chunks on significant rotation
         
-        // Always update on first frame, if force all visible is enabled, or if moved significantly
-        if (!this.lastChunkUpdateTime || 
-            this.forceAllVisible ||
-            movementMagnitude > MOVEMENT_THRESHOLD || 
-            rotationMagnitude > ROTATION_THRESHOLD || 
-            now - this.lastChunkUpdateTime > 200) { // Update more frequently (was 500ms)
-            
+        // Force forceAllVisible to stay true to prevent world from disappearing
+        this.forceAllVisible = true;
+        
+        // Track significant camera changes to prevent flickering during movement
+        const hasMoved = movementMagnitude > MOVEMENT_THRESHOLD;
+        const hasRotated = rotationMagnitude > ROTATION_THRESHOLD;
+        const isFirstUpdate = !this.lastChunkUpdateTime;
+        const timeSinceLastUpdate = now - (this.lastChunkUpdateTime || 0);
+        const needsUpdate = isFirstUpdate || hasMoved || hasRotated || timeSinceLastUpdate > 200;
+        
+        // Update chunks when player moves
+        if (needsUpdate) {
             // Update all chunks within render distance
             this.chunkManager.updateChunks(position[0], position[1], position[2]);
             
-            // Process all dirty chunks immediately if forcing all visible
+            // Process dirty chunks immediately when forcing all visible
             if (this.forceAllVisible) {
-                // Process all dirty chunks at once
+                // Process all dirty chunks that have been waiting
                 const dirtyChunks = Array.from(this.chunkManager.dirtyChunks);
-                console.log(`Processing all ${dirtyChunks.length} dirty chunks immediately`);
                 
                 for (const chunkKey of dirtyChunks) {
                     const chunk = this.chunkManager.getChunkByKey(chunkKey);
@@ -295,11 +280,21 @@ class VoxelEngine {
                     }
                 }
                 
-                // Process all queued chunks right away
-                while (this.chunkManager.meshGenerationQueue.length > 0) {
+                // Process a batch of queued chunks each frame to avoid stuttering
+                const chunkBatchSize = 5; // Process 5 chunks per frame
+                const chunksToProcess = Math.min(chunkBatchSize, this.chunkManager.meshGenerationQueue.length);
+                
+                for (let i = 0; i < chunksToProcess; i++) {
                     const chunk = this.chunkManager.meshGenerationQueue.shift();
                     if (chunk) {
                         const chunkKey = this.chunkManager.getChunkKey(chunk.x, chunk.y, chunk.z);
+                        
+                        // Skip if chunk no longer exists
+                        if (!this.chunkManager.chunks.has(chunkKey)) {
+                            continue;
+                        }
+                        
+                        // Generate mesh data and create/update mesh
                         const meshData = this.chunkManager.generateMeshData(chunk, chunk.x, chunk.y, chunk.z);
                         
                         if (meshData) {
@@ -310,16 +305,25 @@ class VoxelEngine {
                                 chunk.z * CHUNK_SIZE
                             ];
                             
-                            // Delete old mesh if it exists
+                            // Try to update existing mesh if possible
                             if (this.chunkManager.meshes.has(chunkKey)) {
-                                this.renderer.deleteMesh(this.chunkManager.meshes.get(chunkKey));
-                                this.chunkManager.meshes.delete(chunkKey);
-                            }
-                            
-                            // Create and store new mesh
-                            const mesh = this.renderer.createMesh(meshData, worldOffset);
-                            if (mesh) {
-                                this.chunkManager.meshes.set(chunkKey, mesh);
+                                const existingMesh = this.chunkManager.meshes.get(chunkKey);
+                                const updatedMesh = this.renderer.updateMesh(existingMesh, meshData);
+                                
+                                if (!updatedMesh) {
+                                    // If update fails, create new mesh
+                                    this.renderer.deleteMesh(existingMesh);
+                                    const newMesh = this.renderer.createMesh(meshData, worldOffset);
+                                    if (newMesh) {
+                                        this.chunkManager.meshes.set(chunkKey, newMesh);
+                                    }
+                                }
+                            } else {
+                                // Create and store new mesh
+                                const mesh = this.renderer.createMesh(meshData, worldOffset);
+                                if (mesh) {
+                                    this.chunkManager.meshes.set(chunkKey, mesh);
+                                }
                             }
                         }
                     }
@@ -404,7 +408,8 @@ class VoxelEngine {
         if (this.debugElement && this.frameCount % 10 === 0) {
             const debugOptions = [];
             if (this.showChunkWireframes) debugOptions.push("Wireframes ON");
-            if (this.forceAllVisible) debugOptions.push("Force Visible ON");
+            if (this.forceAllVisible) debugOptions.push("<strong style='color: #0f0;'>Force Visible ON</strong>");
+            else debugOptions.push("<strong style='color: #f00;'>Force Visible OFF</strong>");
             
             this.debugElement.innerHTML = `
                 FPS: ${this.fps} | 
@@ -542,10 +547,76 @@ function updateStats() {
 
 // Create the stats container if it doesn't exist
 function createStatsContainer() {
-    // ... existing code ...
+    const container = document.createElement('div');
+    container.id = 'stats-container';
+    container.className = 'stats-container';
     
-    // Add mesh worker stats
-    html += `
+    // Create the HTML for the stats container
+    let html = `
+        <div class="stats-section">
+            <h3>Performance</h3>
+            <div class="stat-row">
+                <span class="stat-label">FPS:</span>
+                <span id="fps" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Memory:</span>
+                <span id="memory" class="stat-value">0 MB</span>
+            </div>
+        </div>
+        
+        <div class="stats-section">
+            <h3>World</h3>
+            <div class="stat-row">
+                <span class="stat-label">Chunks:</span>
+                <span id="chunk-count" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Meshes:</span>
+                <span id="mesh-count" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Dirty Chunks:</span>
+                <span id="dirty-chunks" class="stat-value">0</span>
+            </div>
+        </div>
+        
+        <div class="stats-section">
+            <h3>Buffer Pool</h3>
+            <div class="stat-row">
+                <span class="stat-label">Created:</span>
+                <span id="buffer-created" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Reused:</span>
+                <span id="buffer-reused" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Updated:</span>
+                <span id="buffer-updated" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Resized:</span>
+                <span id="buffer-resized" class="stat-value">0</span>
+            </div>
+        </div>
+        
+        <div class="stats-section">
+            <h3>Node Pool</h3>
+            <div class="stat-row">
+                <span class="stat-label">Created:</span>
+                <span id="node-created" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Reused:</span>
+                <span id="node-reused" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Pool Size:</span>
+                <span id="node-poolsize" class="stat-value">0</span>
+            </div>
+        </div>
+        
         <div class="stats-section">
             <h3>Mesh Workers</h3>
             <div class="stat-row">
@@ -583,5 +654,45 @@ function createStatsContainer() {
         </div>
     `;
     
-    // ... existing code ...
+    // Add the HTML to the container
+    container.innerHTML = html;
+    
+    // Add styles
+    const style = document.createElement('style');
+    style.textContent = `
+        .stats-container {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 250px;
+            z-index: 1000;
+        }
+        .stats-section {
+            margin-bottom: 10px;
+        }
+        .stats-section h3 {
+            margin: 0 0 5px 0;
+            font-size: 14px;
+            border-bottom: 1px solid #555;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+        }
+        .stat-label {
+            margin-right: 5px;
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // Add the container to the document
+    document.body.appendChild(container);
+    
+    return container;
 }

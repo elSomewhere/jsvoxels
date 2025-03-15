@@ -23,6 +23,15 @@ export class ChunkManager {
         // Debug - Check VoxelType import
         console.log("VoxelType import check:", VoxelType);
         
+        // Initialize stats object to track performance
+        this.stats = {
+            chunksLoaded: 0,
+            chunksUnloaded: 0,
+            meshesGenerated: 0,
+            totalTime: 0,
+            averageTime: 0
+        };
+        
         // Circular buffer configuration
         this.MAX_CHUNKS = 500; // Maximum number of chunks to keep in memory
         this.CHUNKS_PER_FRAME = 3; // Number of chunks to load/unload per frame
@@ -47,17 +56,6 @@ export class ChunkManager {
         this.lastOptimizationTime = 0;
         this.optimizationInterval = 1000; // 1 second between octree optimizations
         this.chunksToOptimizePerFrame = 5;
-        
-        // Stats
-        this.stats = {
-            chunksLoaded: 0,
-            chunksUnloaded: 0,
-            meshesCreated: 0
-        };
-
-        // Queue for processing chunks
-        this.loadQueue = [];      // Queue for chunks to load
-        this.unloadQueue = [];    // Queue for chunks to unload (mainly for cleanup)
         
         // Stats
         this.totalNodes = 0;
@@ -107,6 +105,10 @@ export class ChunkManager {
         // WebGPU integration
         this.webgpuInitialized = false;
         this.initWebGPU();
+
+        // Queue for processing chunks
+        this.loadQueue = [];      // Queue for chunks to load
+        this.unloadQueue = [];    // Queue for chunks to unload (mainly for cleanup)
     }
 
     // Initialize WebGPU if available
@@ -146,11 +148,18 @@ export class ChunkManager {
         const chunkKey = this.getChunkKey(x, y, z);
         
         if (this.chunks.has(chunkKey)) {
-            console.log(`Marking chunk as dirty: ${chunkKey}`);
             this.dirtyChunks.add(chunkKey);
+            
+            // Immediately queue mesh generation if we're not already processing too many chunks
+            if (this.meshGenerationQueue.length < 10) {
+                const chunk = this.getChunk(x, y, z);
+                if (chunk && !this.meshGenerationQueue.some(c => c.x === x && c.y === y && c.z === z)) {
+                    this.queueMeshGeneration(chunk);
+                }
+            }
+            
             return true;
         } else {
-            console.log(`Cannot mark non-existent chunk as dirty: ${chunkKey}`);
             return false;
         }
     }
@@ -356,6 +365,9 @@ export class ChunkManager {
         // Clear the load queue
         this.loadQueue = [];
         
+        // Keep track of chunks that need to stay loaded
+        const chunksToKeep = new Set();
+        
         // Build a priority-sorted list of chunks to load
         // Use a spiral pattern outward from the player's position
         for (let d = 0; d <= this.RENDER_DISTANCE; d++) {
@@ -371,9 +383,15 @@ export class ChunkManager {
                         const chunkY = playerChunkY + dy;
                         const chunkZ = playerChunkZ + dz;
                         
-                        // Skip if chunk already exists
                         const key = this.getChunkKey(chunkX, chunkY, chunkZ);
-                        if (this.chunks.has(key)) continue;
+                        
+                        // Add this chunk to the "keep" set
+                        chunksToKeep.add(key);
+                        
+                        // Skip if chunk already exists
+                        if (this.chunks.has(key)) {
+                            continue;
+                        }
                         
                         // Skip underground chunks far from player for optimization
                         if (chunkY < 0 && (Math.abs(dx) > 3 || Math.abs(dz) > 3)) continue;
@@ -395,9 +413,12 @@ export class ChunkManager {
         
         // Create unload queue - chunks outside render distance WITH A BUFFER ZONE
         const unloadQueue = [];
-        const UNLOAD_BUFFER = 3; // Additional chunks to keep loaded beyond render distance
+        const UNLOAD_BUFFER = 5; // Extra buffer to keep more chunks loaded
         
+        // Find chunks that are no longer in the "keep" set and are far from player
         for (const [key, chunk] of this.chunks.entries()) {
+            if (chunksToKeep.has(key)) continue; // Skip chunks we want to keep
+            
             // Extract chunk coordinates from key
             const [chunkX, chunkY, chunkZ] = key.split(',').map(Number);
             
@@ -421,30 +442,36 @@ export class ChunkManager {
         unloadQueue.sort((a, b) => b.distance - a.distance);
         
         // Process the load queue (limited to CHUNKS_PER_FRAME)
-        const chunkProcessCount = Math.min(this.CHUNKS_PER_FRAME, this.loadQueue.length);
+        // Increase CHUNKS_PER_FRAME temporarily when player first moves to new area
+        const adjustedChunksPerFrame = hasPlayerMovedChunks ? this.CHUNKS_PER_FRAME * 2 : this.CHUNKS_PER_FRAME;
+        const chunkProcessCount = Math.min(adjustedChunksPerFrame, this.loadQueue.length);
+        
         for (let i = 0; i < chunkProcessCount; i++) {
             try {
                 const { x, y, z } = this.loadQueue[i];
                 const chunk = this.addChunkToBuffer(x, y, z);
                 if (chunk) {
-                    this.stats.chunksLoaded++;
-                } else {
-                    console.warn(`Failed to add chunk at ${x}, ${y}, ${z} to buffer`);
+                    if (this.stats && this.stats.chunksLoaded !== undefined) {
+                        this.stats.chunksLoaded++;
+                    }
+                    
+                    // Mark chunk as dirty so it gets a mesh
+                    this.markChunkDirty(x, y, z);
                 }
             } catch (error) {
                 console.error("Error processing chunk from load queue:", error);
             }
         }
         
-        // Process unload queue (limited to CHUNKS_PER_FRAME/2 to prioritize loading)
-        // Only unload chunks if we've exceeded 80% of our MAX_CHUNKS capacity
-        if (this.totalChunks > this.MAX_CHUNKS * 0.8) {
-            const unloadCount = Math.min(Math.floor(this.CHUNKS_PER_FRAME/2), unloadQueue.length);
+        // Process unload queue - BUT ONLY IF ABSOLUTELY NECESSARY
+        // Only unload chunks if we've exceeded 95% of our MAX_CHUNKS capacity
+        if (this.totalChunks > this.MAX_CHUNKS * 0.95) {
+            const unloadCount = Math.min(Math.floor(this.CHUNKS_PER_FRAME/4), unloadQueue.length);
             for (let i = 0; i < unloadCount; i++) {
                 try {
                     const { key } = unloadQueue[i];
                     const [x, y, z] = key.split(',').map(Number);
-            this.unloadChunk(x, y, z);
+                    this.unloadChunk(x, y, z);
                 } catch (error) {
                     console.error("Error unloading chunk:", error);
                 }
@@ -578,75 +605,86 @@ export class ChunkManager {
 
     // Process mesh generation for dirty chunks
     processMeshGeneration() {
-        console.log(`Processing mesh generation: ${this.dirtyChunks.size} dirty chunks`);
+        // Keep track of how many chunks we process
+        const maxProcessCount = 10;
+        let processedCount = 0;
         
-        // Generate debug statistics
+        // Process dirty chunks that haven't been queued yet
         if (this.dirtyChunks.size > 0) {
-            let dirtyChunksArray = Array.from(this.dirtyChunks);
-            console.log(`First 5 dirty chunks: ${dirtyChunksArray.slice(0, 5).join(', ')}`);
-        }
-
-        // Process dirty chunks from previous updates
-        const dirtyChunksToProcess = Math.min(this.dirtyChunks.size, 10);
-        if (dirtyChunksToProcess > 0) {
-            console.log(`Processing ${dirtyChunksToProcess} dirty chunks out of ${this.dirtyChunks.size}`);
-            
-            let processedCount = 0;
             for (const chunkKey of this.dirtyChunks) {
                 const chunk = this.getChunkByKey(chunkKey);
                 if (!chunk) {
-                    console.log(`WARNING: Dirty chunk ${chunkKey} not found, removing from dirty set`);
                     this.dirtyChunks.delete(chunkKey);
                     continue;
                 }
 
-                // Queue mesh generation for this chunk
-                console.log(`Queuing mesh generation for dirty chunk: ${chunkKey}`);
+                // Check if it's already in queue
+                if (this.meshGenerationQueue.some(c => 
+                    c.x === chunk.x && c.y === chunk.y && c.z === chunk.z)) {
+                    continue;
+                }
+
+                // Queue it for mesh generation
                 this.queueMeshGeneration(chunk);
                 this.dirtyChunks.delete(chunkKey);
                 
                 processedCount++;
-                if (processedCount >= dirtyChunksToProcess) {
+                if (processedCount >= maxProcessCount) {
                     break;
                 }
             }
-            
-            console.log(`Processed ${processedCount} dirty chunks, ${this.dirtyChunks.size} remaining`);
         }
         
-        // Process mesh generation queue
-        if (this.meshGenerationQueue.length > 0) {
-            console.log(`Mesh generation queue contains ${this.meshGenerationQueue.length} chunks`);
+        // Start/continue processing the mesh queue
+        if (this.meshGenerationQueue.length > 0 && !this.isProcessingMesh) {
             this.processNextInMeshQueue();
         }
     }
 
     // Generate a mesh for a chunk
     async generateChunkMesh(chunk, key) {
-        console.log(`Generating mesh for chunk ${key}`);
-        
         if (!chunk) {
             console.error(`Cannot generate mesh for null chunk ${key}`);
+            return null;
+        }
+        
+        // Avoid generating meshes for chunks that no longer exist
+        if (!this.chunks.has(key)) {
             return null;
         }
         
         // Extract mesh data
         const meshData = this.generateMeshData(chunk, chunk.x, chunk.y, chunk.z);
         
-        if (!meshData) {
-            console.error(`Failed to generate mesh data for chunk ${key}`);
-            return null;
+        if (!meshData || !meshData.positions || meshData.positions.length === 0) {
+            // Handle empty mesh case more gracefully
+            if (this.meshes.has(key)) {
+                this.renderer.deleteMesh(this.meshes.get(key));
+                this.meshes.delete(key);
+            }
+            
+            // Create an empty mesh to indicate this chunk has been processed
+            const emptyMeshData = {
+                positions: [],
+                normals: [],
+                colors: [],
+                indices: []
+            };
+            
+            const worldOffset = [
+                chunk.x * CHUNK_SIZE,
+                chunk.y * CHUNK_SIZE,
+                chunk.z * CHUNK_SIZE
+            ];
+            
+            const emptyMesh = this.renderer.createMesh(emptyMeshData, worldOffset);
+            if (emptyMesh) {
+                this.meshes.set(key, emptyMesh);
+            }
+            
+            return emptyMesh;
         }
-        
-        console.log(`Mesh data generated for chunk ${key}: ${meshData.positions.length / 3} vertices, ${meshData.indices.length / 3} triangles`);
 
-                // Delete old mesh if it exists
-                if (this.meshes.has(key)) {
-            console.log(`Deleting old mesh for chunk ${key}`);
-                    this.renderer.deleteMesh(this.meshes.get(key));
-            this.meshes.delete(key);
-        }
-        
         // Calculate world offset
         const worldOffset = [
             chunk.x * CHUNK_SIZE,
@@ -654,19 +692,31 @@ export class ChunkManager {
             chunk.z * CHUNK_SIZE
         ];
         
-        // Create mesh
-        const mesh = this.renderer.createMesh(meshData, worldOffset);
+        // Create or update mesh based on whether one already exists
+        let mesh;
         
-        if (!mesh) {
-            console.error(`Failed to create mesh for chunk ${key}`);
-            return null;
-                }
-
-                // Store mesh
-        this.meshes.set(key, mesh);
+        if (this.meshes.has(key)) {
+            // Try to update existing mesh first to prevent flickering
+            const existingMesh = this.meshes.get(key);
+            mesh = this.renderer.updateMesh(existingMesh, meshData);
+            
+            // If update fails, delete and create new
+            if (!mesh) {
+                this.renderer.deleteMesh(existingMesh);
+                mesh = this.renderer.createMesh(meshData, worldOffset);
+            }
+        } else {
+            // Create new mesh
+            mesh = this.renderer.createMesh(meshData, worldOffset);
+        }
         
-        console.log(`Successfully created mesh for chunk ${key}`);
-        return mesh;
+        // Store mesh if successfully created
+        if (mesh) {
+            this.meshes.set(key, mesh);
+            return mesh;
+        }
+        
+        return null;
     }
 
     // Generate mesh data for a chunk
@@ -883,11 +933,23 @@ export class ChunkManager {
         }
 
         // Convert to local coordinates
-        const localX = ((worldX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-        const localY = ((worldY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-        const localZ = ((worldZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        const localX = worldX - (chunkX * CHUNK_SIZE);
+        const localY = worldY - (chunkY * CHUNK_SIZE);
+        const localZ = worldZ - (chunkZ * CHUNK_SIZE);
 
-        return chunk.getVoxel(localX, localY, localZ);
+        // Handle out of bounds 
+        if (localX < 0 || localX >= CHUNK_SIZE || 
+            localY < 0 || localY >= CHUNK_SIZE || 
+            localZ < 0 || localZ >= CHUNK_SIZE) {
+            return 0;
+        }
+
+        try {
+            return chunk.getVoxel(localX, localY, localZ);
+        } catch (error) {
+            console.error(`Error getting voxel at ${worldX},${worldY},${worldZ}:`, error);
+            return 0;
+        }
     }
 
     // Set voxel at world coordinates
@@ -1497,85 +1559,75 @@ export class ChunkManager {
         }
         
         if (this.isProcessingMesh) {
-            console.log(`Already processing a mesh, waiting...`);
+            // Don't log to avoid console spam
             return;
         }
         
         this.isProcessingMesh = true;
         
-        // Get the next chunk from the queue
-        const chunk = this.meshGenerationQueue.shift();
-        const chunkKey = this.getChunkKey(chunk.x, chunk.y, chunk.z);
-        
-        console.log(`Processing mesh for chunk ${chunkKey}, ${this.meshGenerationQueue.length} remaining in queue`);
-        
         try {
-            // Check if chunk still exists (might have been unloaded)
-            if (!this.chunks.has(chunkKey)) {
-                console.log(`Chunk ${chunkKey} no longer exists, skipping mesh generation`);
-                this.isProcessingMesh = false;
-                
-                // Continue with next chunk if available
-                if (this.meshGenerationQueue.length > 0) {
-                    setTimeout(() => this.processNextInMeshQueue(), 0);
+            // Process up to 3 chunks at once for better performance
+            const chunkBatch = [];
+            for (let i = 0; i < 3 && this.meshGenerationQueue.length > 0; i++) {
+                const chunk = this.meshGenerationQueue.shift();
+                if (chunk) {
+                    chunkBatch.push(chunk);
                 }
-                return;
             }
-            
-            // Check if this chunk has any visible voxels
-            const visibleVoxels = this.extractVisibleVoxels(chunk);
-            console.log(`Chunk ${chunkKey} has ${visibleVoxels.length} visible voxels`);
-            
-            if (visibleVoxels.length === 0) {
-                console.log(`Chunk ${chunkKey} has no visible voxels, skipping mesh generation`);
-                // Still create an empty mesh to prevent re-processing
-                if (this.meshes.has(chunkKey)) {
-                    console.log(`Deleting existing mesh for empty chunk ${chunkKey}`);
-                    this.renderer.deleteMesh(this.meshes.get(chunkKey));
-                    this.meshes.delete(chunkKey);
+
+            // Process all chunks in the batch
+            for (const chunk of chunkBatch) {
+                const chunkKey = this.getChunkKey(chunk.x, chunk.y, chunk.z);
+                
+                // Skip if chunk no longer exists
+                if (!this.chunks.has(chunkKey)) {
+                    continue;
                 }
                 
-                // Create empty mesh data
-                const emptyMeshData = {
-                    positions: [],
-                    normals: [],
-                    colors: [],
-                    indices: []
-                };
+                // Check if this chunk has any visible voxels
+                const visibleVoxels = this.extractVisibleVoxels(chunk);
                 
-                const worldOffset = [
-                    chunk.x * CHUNK_SIZE,
-                    chunk.y * CHUNK_SIZE,
-                    chunk.z * CHUNK_SIZE
-                ];
-                
-                // Create empty mesh
-                const mesh = this.renderer.createMesh(emptyMeshData, worldOffset);
-                this.meshes.set(chunkKey, mesh);
-                console.log(`Created empty mesh for chunk ${chunkKey}`);
-                
-                this.isProcessingMesh = false;
-                
-                // Continue with next chunk if available
-                if (this.meshGenerationQueue.length > 0) {
-                    setTimeout(() => this.processNextInMeshQueue(), 0);
+                if (visibleVoxels.length === 0) {
+                    // Create empty mesh for tracking
+                    if (this.meshes.has(chunkKey)) {
+                        this.renderer.deleteMesh(this.meshes.get(chunkKey));
+                        this.meshes.delete(chunkKey);
+                    }
+                    
+                    // Create empty mesh data
+                    const emptyMeshData = {
+                        positions: [],
+                        normals: [],
+                        colors: [],
+                        indices: []
+                    };
+                    
+                    const worldOffset = [
+                        chunk.x * CHUNK_SIZE,
+                        chunk.y * CHUNK_SIZE,
+                        chunk.z * CHUNK_SIZE
+                    ];
+                    
+                    // Create empty mesh
+                    const mesh = this.renderer.createMesh(emptyMeshData, worldOffset);
+                    if (mesh) {
+                        this.meshes.set(chunkKey, mesh);
+                    }
+                } else {
+                    // Generate the mesh - we'll await each mesh generation to avoid overwhelming the GPU
+                    await this.generateChunkMesh(chunk, chunkKey);
                 }
-                return;
             }
-            
-            // Generate the mesh
-            await this.generateChunkMesh(chunk, chunkKey);
-            
-            console.log(`Mesh generation completed for chunk ${chunkKey}`);
         } catch (error) {
-            console.error(`Error processing mesh for chunk ${chunkKey}:`, error);
-        }
-        
-        this.isProcessingMesh = false;
-        
-        // Continue with next chunk if available
-        if (this.meshGenerationQueue.length > 0) {
-            setTimeout(() => this.processNextInMeshQueue(), 0);
+            console.error(`Error processing mesh batch:`, error);
+        } finally {
+            this.isProcessingMesh = false;
+            
+            // Continue with next chunks if available
+            if (this.meshGenerationQueue.length > 0) {
+                // Use setTimeout to avoid blocking the main thread
+                setTimeout(() => this.processNextInMeshQueue(), 0);
+            }
         }
     }
     
@@ -1648,7 +1700,9 @@ export class ChunkManager {
         // Reset stats
         this.stats.chunksLoaded = 0;
         this.stats.chunksUnloaded = 0;
-        this.stats.meshesCreated = 0;
+        this.stats.meshesGenerated = 0;
+        this.stats.totalTime = 0;
+        this.stats.averageTime = 0;
     }
 
     // Get stats about the chunk manager
